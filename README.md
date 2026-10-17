@@ -103,10 +103,10 @@ This first version handles **one video at a time** and does not include login, c
 ## Development
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
 ```
 
-On Linux/macOS, use `.venv/bin/python -m unittest discover -s tests -v`. Tests cover input validation, menu interactions, and failure handling. Integration tests generate a small media file with FFmpeg and serve it over local HTTP to verify complete video and MP3 downloads without depending on external websites. Integration tests are skipped when FFmpeg/ffprobe are unavailable.
+On Linux/macOS, use `.venv/bin/python -B -m unittest discover -s tests -v`. Tests cover input validation, menu interactions, and failure handling. Integration tests generate a small media file with FFmpeg and serve it over local HTTP to verify complete video and MP3 downloads without depending on external websites. Integration tests are skipped when FFmpeg/ffprobe are unavailable.
 
 ```text
 src/universal_downloader/
@@ -118,12 +118,21 @@ scripts/
 tests/               Unit tests and local integration tests
 ```
 
+## Local files and cleanup
+
+The Windows launcher and installation checks use Python's `-B` option to avoid creating bytecode caches in the source directories. The test command above does the same.
+
+- `__pycache__/` and `*.pyc` are disposable Python caches, excluded from Git.
+- `downloads/` contains downloaded media. Remove files there only when you no longer want them. No `verification/` folder is required by the app.
+- `.venv/` contains the installed Python environment; `.tools/` contains FFmpeg, ffprobe, and Deno. Keep them to run the app without reinstalling.
+- `*.egg-info/` is generated package metadata. Keep it with the development installation; it is excluded from Git.
+- `tests/` and `.github/workflows/` contain the automated checks, not leftover download samples.
+
 ## Roadmap
 
 - [ ] Download queues and playlists.
 - [ ] Download history.
 - [ ] Per-video format selection.
-- [ ] A graphical interface using the same download module.
 
 ## License
 

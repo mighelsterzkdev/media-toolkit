@@ -33,9 +33,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not prepare pip. Check your internet connection.' }
     & $venvPython -m pip install -e .
     if ($LASTEXITCODE -ne 0) { throw 'Could not install Python dependencies.' }
-    & $venvPython -X utf8 (Join-Path $PSScriptRoot 'scripts\install_tools.py')
+    & $venvPython -B -X utf8 (Join-Path $PSScriptRoot 'scripts\install_tools.py')
     if ($LASTEXITCODE -ne 0) { throw 'Could not install the download tools.' }
-    & $venvPython -X utf8 -m universal_downloader --doctor
+    & $venvPython -B -X utf8 -m universal_downloader --doctor
     if ($LASTEXITCODE -ne 0) { throw 'Some dependencies are still missing.' }
     Write-Host "`nReady! Open start.cmd to begin."
     exit 0
