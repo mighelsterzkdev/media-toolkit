@@ -11,7 +11,12 @@ from yt_dlp.version import __version__ as ytdlp_version
 
 from . import __version__
 from .dependencies import find_ffmpeg, find_js_runtime
-from .downloader import DownloadError, DownloadRequest, download, validate_url
+from .downloader import DownloadError, DownloadRequest, download, inspect_url, validate_url
+from .formats import (
+    ALL_FORMATS, AUDIO_BITRATES, AUDIO_FORMATS, IMAGE_FORMATS, LOSSY_AUDIO_FORMATS,
+    VIDEO_FORMATS, VIDEO_QUALITIES, normalize_format,
+)
+from .images import available_image_formats
 
 
 class _Logger:
@@ -68,13 +73,67 @@ def _choose(prompt: str, choices: dict[str, str], default: str) -> str:
         print("Invalid option. Try again.")
 
 
+def _format_menu(formats: dict[str, str], name: str, default: str) -> str:
+    choices = {str(index): key for index, key in enumerate(formats, 1)}
+    default_choice = next(index for index, key in choices.items() if key == default)
+    menu = "\n" + name + "\n" + "\n".join(f"{index}. {formats[key]}" for index, key in choices.items())
+    return _choose(menu + f"\nFormat [{default_choice}]: ", choices, default_choice)
+
+
+def _show_formats(information: dict) -> None:
+    _show_info(information)
+    formats = information.get("formats") or []
+    if formats:
+        print("\nAvailable source formats (reported by the website):")
+        rows = [("ID", "TYPE", "EXT", "RESOLUTION", "VIDEO CODEC", "AUDIO CODEC")]
+        for item in formats:
+            video = item.get("vcodec") not in (None, "none")
+            audio = item.get("acodec") not in (None, "none")
+            kind = "video+audio" if video and audio else "video" if video else "audio" if audio else "media"
+            resolution = f"{item['width']}x{item['height']}" if item.get("width") and item.get("height") else item.get("resolution") or "-"
+            rows.append(tuple(str(value) for value in (
+                item.get("format_id", "-"), kind, item.get("ext", "-"), resolution,
+                item.get("vcodec") or "-", item.get("acodec") or "-",
+            )))
+        widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
+        for row in rows:
+            print("  ".join(value.ljust(width) for value, width in zip(row, widths)))
+        print('\nSelect an ID with --source-format ID, or combine video+audio IDs as "VIDEO_ID+AUDIO_ID".')
+    else:
+        print("\nNo audio/video source format list was reported for this URL.")
+    thumbnails = information.get("thumbnails") or []
+    if thumbnails or information.get("thumbnail") or information.get("image_url"):
+        print("\nImages/thumbnails are available. Use --format jpg, png, webp, avif, gif, bmp, tiff, ico, or image.")
+        resolutions = sorted({(item.get("width"), item.get("height")) for item in thumbnails if item.get("width") and item.get("height")})
+        if resolutions:
+            print("Thumbnail sizes: " + ", ".join(f"{width}x{height}" for width, height in resolutions))
+    else:
+        print("\nNo thumbnail was reported for this URL.")
+
+
+def _validate_options(parser, media_format, args) -> None:
+    if args.quality is not None and media_format not in VIDEO_FORMATS:
+        parser.error("--quality is only available for video formats")
+    if args.audio_bitrate is not None and media_format not in LOSSY_AUDIO_FORMATS:
+        parser.error("--audio-bitrate is only available for MP3, M4A, AAC, Opus, and OGG")
+    if args.image_quality is not None and media_format not in ("jpg", "webp", "avif"):
+        parser.error("--image-quality is only available for JPG, WebP, and AVIF")
+    if args.source_format is not None:
+        if media_format in IMAGE_FORMATS:
+            parser.error("--source-format is only available for audio and video")
+        if args.quality is not None:
+            parser.error("--source-format cannot be combined with --quality")
+
+
 def _doctor() -> int:
     print(f"Universal Downloader {__version__} | yt-dlp {ytdlp_version}")
     ffmpeg = find_ffmpeg()
     runtime = find_js_runtime()
     print(f"FFmpeg + ffprobe: {ffmpeg if ffmpeg else 'not found'}")
     print(f"JavaScript: {runtime[0] + ' at ' + str(runtime[1]) if runtime else 'not found'}")
-    if not ffmpeg or not runtime:
+    image_formats = available_image_formats()
+    print("Image encoders: " + ", ".join(name.upper() for name in image_formats))
+    if not ffmpeg or not runtime or len(image_formats) != 8:
         print("Run install.cmd on Windows or see the manual installation steps in the README.")
         return 1
     print("Dependencies found. URL compatibility depends on the source website.")
@@ -83,11 +142,15 @@ def _doctor() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="unidown", description="Download a video or extract MP3 audio from a URL.",
+        prog="unidown", description="Download video, audio, thumbnails, and images from a URL.",
     )
-    parser.add_argument("url", nargs="?", help="complete video URL; opens the menu when omitted")
-    parser.add_argument("--format", choices=("video", "mp3"), help="output format (default: video)")
-    parser.add_argument("--quality", choices=("best", "1080", "720", "480"), help="maximum video resolution")
+    parser.add_argument("url", nargs="?", help="video, webpage, or direct image URL; opens the menu when omitted")
+    parser.add_argument("--format", type=normalize_format, choices=ALL_FORMATS, help="output format (video/audio/image keep the original format)")
+    parser.add_argument("--quality", choices=VIDEO_QUALITIES, help="maximum video resolution (default: best)")
+    parser.add_argument("--audio-bitrate", choices=AUDIO_BITRATES, help="lossy audio bitrate in kbps (default: 192)")
+    parser.add_argument("--image-quality", type=int, choices=range(1, 96), metavar="1-95", help="JPG/WebP/AVIF quality (default: 90)")
+    parser.add_argument("--list-formats", action="store_true", help="show the source formats and thumbnails without saving media")
+    parser.add_argument("--source-format", help='source format ID or selector, e.g. "137+140"; see --list-formats')
     parser.add_argument("--output", type=Path, default=Path("downloads"), help="output directory (default: downloads)")
     parser.add_argument("--doctor", action="store_true", help="check dependencies without downloading anything")
     parser.add_argument("--verbose", action="store_true", help="show technical details for troubleshooting")
@@ -97,30 +160,56 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.doctor:
             return _doctor()
-        if args.format == "mp3" and args.quality is not None:
-            parser.error("--quality can only be used with --format video")
+        if args.format:
+            _validate_options(parser, args.format, args)
+        media_format = args.format or "video"
+        quality = args.quality or "best"
+        audio_bitrate = args.audio_bitrate or "192"
+        show_formats = args.list_formats
         if args.url is None:
             if not sys.stdin.isatty():
                 parser.error("provide a URL or run without arguments in an interactive terminal")
-            print("\nUNIVERSAL DOWNLOADER\nVideo and MP3 downloads from a URL.\n")
+            print("\nUNIVERSAL DOWNLOADER\nVideo, audio, images, and thumbnails from a URL.\n")
             raw_url = input("Paste the URL (Enter to exit): ").strip()
             if not raw_url:
                 return 0
             url = validate_url(raw_url)
-            media_format = args.format or _choose(
-                "\n1. Video\n2. MP3 audio\nFormat [1]: ", {"1": "video", "2": "mp3"}, "1",
-            )
-            quality = args.quality or "best"
-            if media_format == "video" and args.quality is None:
+            if not args.format and not show_formats:
+                kind = _choose(
+                    "\n1. Video\n2. Audio\n3. Image / thumbnail\n4. Available source formats\nType [1]: ",
+                    {"1": "video", "2": "audio", "3": "image", "4": "list"}, "1",
+                )
+                if kind == "list":
+                    show_formats = True
+                elif kind == "video":
+                    media_format = _format_menu(VIDEO_FORMATS, "Video format", "video")
+                elif kind == "audio":
+                    media_format = _format_menu(AUDIO_FORMATS, "Audio format", "mp3")
+                else:
+                    available = available_image_formats()
+                    choices = {key: label for key, label in IMAGE_FORMATS.items() if key in available or key == "image"}
+                    media_format = _format_menu(choices, "Image format", "jpg" if "jpg" in choices else "image")
+            if media_format in VIDEO_FORMATS and args.quality is None and not args.source_format and not show_formats:
                 quality = _choose(
-                    "\n1. Best available\n2. Up to 1080p\n3. Up to 720p\n4. Up to 480p\nQuality [1]: ",
-                    {"1": "best", "2": "1080", "3": "720", "4": "480"}, "1",
+                    "\n1. Best available\n2. Up to 4K (2160p)\n3. Up to 1440p\n4. Up to 1080p\n5. Up to 720p\n6. Up to 480p\n7. Up to 360p\nQuality [1]: ",
+                    {str(index): value for index, value in enumerate(VIDEO_QUALITIES, 1)}, "1",
+                )
+            if media_format in LOSSY_AUDIO_FORMATS and args.audio_bitrate is None and not show_formats:
+                audio_bitrate = _choose(
+                    "\n1. 64 kbps\n2. 96 kbps\n3. 128 kbps\n4. 160 kbps\n5. 192 kbps\n6. 256 kbps\n7. 320 kbps\nAudio bitrate [5]: ",
+                    {str(index): value for index, value in enumerate(AUDIO_BITRATES, 1)}, "5",
                 )
         else:
-            url, media_format, quality = args.url, args.format or "video", args.quality or "best"
+            url = validate_url(args.url)
+        if show_formats:
+            _show_formats(inspect_url(url, logger=_Logger(args.verbose)))
+            return 0
+        _validate_options(parser, media_format, args)
         print("\nChecking the URL...")
+        if media_format not in ("video", "audio") and media_format not in IMAGE_FORMATS:
+            print("The selected format will be encoded locally. Conversion can take a while for large files.")
         result = download(
-            DownloadRequest(url, media_format, quality, args.output),
+            DownloadRequest(url, media_format, quality, args.output, audio_bitrate, args.image_quality or 90, args.source_format),
             progress_hook=_Progress(), on_info=_show_info, logger=_Logger(args.verbose),
         )
         print(f"\nDone! File saved to:\n{result.path}")

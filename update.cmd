@@ -5,7 +5,7 @@ if not exist "%~dp0.venv\Scripts\python.exe" (
     set /p "_unidownExit=Press Enter to close..."
     exit /b 1
 )
-"%~dp0.venv\Scripts\python.exe" -m pip install --upgrade "yt-dlp[default]"
+"%~dp0.venv\Scripts\python.exe" -B -m pip install --upgrade "yt-dlp[default]" "Pillow>=12.0,<13"
 set "result=%errorlevel%"
 if "%~1"=="" set /p "_unidownExit=Press Enter to close..."
 exit /b %result%

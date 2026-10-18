@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "universal-downloader"
-version = "0.1.0"
-description = "Download videos and extract MP3 audio from a URL, right in your terminal."
+version = "0.2.0"
+description = "Download videos, audio, images, and thumbnails from a URL in your terminal."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-dependencies = ["yt-dlp[default]>=2025.11.12"]
+dependencies = ["yt-dlp[default]>=2025.11.12", "Pillow>=12.0,<13"]
 
 [project.scripts]
 unidown = "universal_downloader.cli:main"

@@ -37,9 +37,29 @@ class InputTests(unittest.TestCase):
         downloader.assert_not_called()
 
     def test_invalid_format_and_quality_fail_early(self):
-        for media_format, quality in (("wav", "best"), ("video", "999"), ("mp3", "720")):
+        for media_format, quality in (("zip", "best"), ("video", "999"), ("mp3", "720")):
             with self.subTest(format=media_format, quality=quality), self.assertRaises(DownloadError):
                 download(DownloadRequest("https://example.com/video", media_format, quality))
+
+    @patch("universal_downloader.downloader.YoutubeDL")
+    def test_invalid_extended_options_fail_before_network_access(self, downloader):
+        for settings in (
+            {"audio_bitrate": "999"}, {"media_format": "flac", "audio_bitrate": "320"},
+            {"image_quality": 0}, {"image_quality": 96},
+            {"media_format": "png", "image_quality": 80},
+            {"source_format": ""}, {"source_format": "bad\nvalue"},
+            {"source_format": "123", "quality": "720"},
+            {"media_format": "png", "source_format": "123"},
+        ):
+            with self.subTest(settings=settings), self.assertRaises(DownloadError):
+                download(DownloadRequest("https://example.com/video", **settings))
+        downloader.assert_not_called()
+
+    @patch("universal_downloader.downloader.find_ffmpeg", return_value=Path("."))
+    @patch("universal_downloader.downloader.find_js_runtime", return_value=None)
+    def test_malformed_source_selector_has_a_readable_error(self, runtime, ffmpeg):
+        with tempfile.TemporaryDirectory() as temporary, self.assertRaisesRegex(DownloadError, "source format selector"):
+            download(DownloadRequest("https://example.com/video", source_format="[", output_dir=Path(temporary)))
 
     @patch("universal_downloader.downloader.find_ffmpeg", return_value=Path("."))
     @patch("universal_downloader.downloader.find_js_runtime", return_value=None)
