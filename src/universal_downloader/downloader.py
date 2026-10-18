@@ -254,6 +254,8 @@ def _download_converted(url, kind, target, output_dir, inspected, progress_hook,
         "quiet": True, "windowsfilenames": True,
         "paths": {"home": str(output_dir)}, "outtmpl": {"default": template},
     }
+    if logger is not None:
+        naming_options["logger"] = logger
     with YoutubeDL(naming_options) as naming:
         destination = Path(naming.prepare_filename({**inspected.information, "ext": target})).resolve()
     title = inspected.information.get("title") or destination.stem
