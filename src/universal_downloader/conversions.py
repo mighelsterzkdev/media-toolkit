@@ -51,10 +51,23 @@ def validate_conversion(inspected: MediaInspection, kind: str, target: str) -> N
     native_gif = False
     if target == "gif" and inspected.image_data:
         native_gif = check_image(inspected.image_data)[0] == "gif"
-    if target == "gif" and not native_gif and isinstance(duration, (int, float)) and duration > MAX_GIF_SECONDS:
-        raise DownloadError(f"GIF conversion supports animations up to {MAX_GIF_SECONDS} seconds. Keep the original for longer animations.")
+    if target == "gif" and not native_gif and isinstance(duration, (int, float)):
+        if not math.isfinite(duration) or not 0 < duration <= MAX_GIF_SECONDS:
+            raise DownloadError(f"GIF conversion supports animations with a duration of up to {MAX_GIF_SECONDS} seconds. Keep the original for other animations.")
     if target in ("mp3", "mp4", "gif") and not native_gif and find_ffmpeg() is None:
         raise DownloadError("FFmpeg and ffprobe are required for this conversion. Run install.cmd.")
+
+
+def available_conversions(inspected: MediaInspection, kind: str) -> tuple[str, ...]:
+    """Offer only conversions that pass the same preflight as the downloader."""
+    available = []
+    for target in conversion_targets(inspected, kind):
+        try:
+            validate_conversion(inspected, kind, target)
+        except DownloadError:
+            continue
+        available.append(target)
+    return tuple(available)
 
 
 def _tools() -> tuple[Path, Path]:

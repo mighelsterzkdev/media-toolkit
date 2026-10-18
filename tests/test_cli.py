@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PIL import Image
+
 from universal_downloader.cli import main
 from universal_downloader.downloader import DownloadError, DownloadResult
 from universal_downloader.inspection import MediaInspection
@@ -11,6 +13,12 @@ from universal_downloader.inspection import MediaInspection
 
 class CliTests(unittest.TestCase):
     def setUp(self):
+        encoder = patch("universal_downloader.conversions.find_ffmpeg", return_value=Path("."))
+        encoder.start()
+        self.addCleanup(encoder.stop)
+        with io.BytesIO() as encoded:
+            Image.new("RGB", (2, 2), "red").save(encoded, "GIF")
+            self.gif_data = encoded.getvalue()
         inspector = patch("universal_downloader.cli.inspect_media")
         self.inspect_media = inspector.start()
         self.addCleanup(inspector.stop)
@@ -92,7 +100,7 @@ class CliTests(unittest.TestCase):
                 self.download.assert_not_called()
 
     def test_animations_do_not_offer_static_image_conversions(self):
-        self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Animation"}, ("image",), image_data=b"gif", animated=True)
+        self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Animation"}, ("image",), image_data=self.gif_data, animated=True, image_extension="gif")
         status, _ = self.menu([self.inspected.url, "2", ""])
         self.assertEqual(status, 0)
         self.assertEqual(self.download.call_args.args[0].convert_to, "gif")
@@ -144,8 +152,50 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.download.call_args.args[0].media_format, "image")
         self.assertEqual(self.download.call_args.args[0].convert_to, "gif")
         self.assertIn("Available: Animation", self.output.getvalue())
+        self.assertIn("1. Original MP4 (recommended)", self.output.getvalue())
         self.assertIn("2. GIF animation", self.output.getvalue())
         self.assertIn("3. MP4 video", self.output.getvalue())
+
+    def test_known_unusable_gif_durations_are_not_offered(self):
+        for duration in (31, 0, -1, float("inf"), float("nan")):
+            with self.subTest(duration=duration):
+                self.output.seek(0)
+                self.output.truncate()
+                self.inspect_media.return_value = MediaInspection(
+                    self.inspected.url, {"title": "Animation", "ext": "mp4", "duration": duration},
+                    ("image",), animated=True, animation_video=True,
+                )
+                status, _ = self.menu([self.inspected.url, "2", ""])
+                self.assertEqual(status, 0)
+                self.assertNotIn("GIF animation", self.output.getvalue())
+                self.assertIn("2. MP4 video", self.output.getvalue())
+                self.assertEqual(self.download.call_args.args[0].convert_to, "mp4")
+
+    def test_native_gif_remains_available_without_ffmpeg_or_duration_limit(self):
+        self.inspect_media.return_value = MediaInspection(
+            self.inspected.url, {"title": "Animation", "duration": 120}, ("image",),
+            image_data=self.gif_data, animated=True, image_extension="gif",
+        )
+        with patch("universal_downloader.conversions.find_ffmpeg", return_value=None):
+            status, _ = self.menu([self.inspected.url, "2", ""])
+        self.assertEqual(status, 0)
+        self.assertIn("1. Original GIF (recommended)", self.output.getvalue())
+        self.assertIn("2. GIF animation", self.output.getvalue())
+        self.assertNotIn("MP4 video", self.output.getvalue())
+        self.assertEqual(self.download.call_args.args[0].convert_to, "gif")
+
+    def test_missing_encoder_hides_conversion_but_still_requires_original_choice(self):
+        self.inspect_media.return_value = MediaInspection(
+            self.inspected.url, {"title": "Animation", "ext": "mp4"},
+            ("image",), animated=True, animation_video=True,
+        )
+        with patch("universal_downloader.conversions.find_ffmpeg", return_value=None):
+            status, user_input = self.menu([self.inspected.url, "0", ""])
+        self.assertEqual(status, 0)
+        self.assertEqual(user_input.call_count, 3)
+        self.assertIn("1. Original MP4 (recommended)", self.output.getvalue())
+        self.assertNotIn("2.", self.output.getvalue())
+        self.download.assert_not_called()
 
     def test_single_type_can_return_to_url_without_downloading(self):
         self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Example"}, ("image",))

@@ -119,13 +119,14 @@ def inspect_media(url: str, *, media_format: str | None = None, logger=None) -> 
             if not live and not animation_video and media_format != "image":
                 video, audio, heights = inspect_streams(information, find_ffmpeg(), downloader.cookiejar)
             image_error = None
+            image_extension = None
             animated = bool(animation_video)
             if not animation_video and (media_format is None or media_format == "image"):
                 try:
                     if data is None and media_format == "image" and not (information.get("image_url") or information.get("thumbnails") or information.get("thumbnail")):
                         information, data = page_or_image(downloader, url)
                     data = data if data is not None else fetch_image(downloader, information)
-                    _, animated = check_image(data)
+                    image_extension, animated = check_image(data)
                 except DownloadError as error:
                     image_error = str(error)
                     data = None
@@ -143,6 +144,7 @@ def inspect_media(url: str, *, media_format: str | None = None, logger=None) -> 
                 url, information, kinds, heights, data, animated, image_error,
                 tuple(deepcopy(cookie) for cookie in downloader.cookiejar),
                 animation_video=bool(animation_video),
+                image_extension=image_extension,
             )
             if media_format:
                 result.validate_format(media_format)

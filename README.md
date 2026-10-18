@@ -22,7 +22,7 @@ Available: Video, Audio, Thumbnail
 0. Another URL
 Download [1]: 3
 
-1. Original (recommended)
+1. Original JPG (recommended)
 2. PNG image
 3. JPG image
 0. Another URL
@@ -44,6 +44,7 @@ Paste the URL (Enter to exit):
 - The menu names the detected asset: **Image**, **Thumbnail**, or **Animation**. A video's static cover is separate from its primary media.
 - **Twitter/X GIFs:** recognize the animated media asset and show **Animation**. If the source delivers the animation as MP4, keep that animated MP4, without downloading its static JPEG preview or converting it to GIF. The image download command handles these animations automatically.
 - Even a link containing only one kind of media shows the output menu before downloading. Press Enter to select the recommended original, or **0** to choose another URL.
+- The recommended option includes the original format when it is known, such as **Original MP4** or **Original PNG**. Merged video and extracted audio keep a generic label when their final container cannot be identified in advance.
 - Completed files are kept and reported as **Already downloaded**.
 - After a download or a failed link, paste another URL in the same session. Enter on an empty URL exits; **0** goes back from the download menu.
 - Reuse inspected metadata, cookies created by the source website, and image bytes when downloading.
@@ -53,10 +54,10 @@ Original downloads do not ask for encoding settings. "Original" means the media 
 
 ## Optional conversion
 
-Every link pasted into the interactive session shows **Original (recommended)** as option **1**, followed by compatible conversions. There is no separate conversion mode. For example, an animation offers:
+Every link pasted into the interactive session shows the recommended original as option **1**, followed by compatible conversions that pass the known duration and tool checks. For example, an animation delivered as MP4 offers:
 
 ```text
-1. Original (recommended)
+1. Original MP4 (recommended)
 2. GIF animation
 3. MP4 video
 0. Another URL
@@ -72,9 +73,11 @@ The available formats depend on the detected content:
 | Image or thumbnail | PNG, JPG |
 | Animation | GIF, MP4 |
 
-Conversions can change quality; they do not restore lost source detail. Animated content is not offered static-image conversions. Re-encoding an animation as GIF supports up to **30 seconds**, at 15 fps and up to 720 pixels on the longest side. Original downloads and unchanged native GIF files are not restricted by that conversion limit. Images and MP3/GIF files already in the requested format are kept without re-encoding when supported.
+Conversions can change quality; they do not restore lost source detail. Animated content is not offered static-image conversions. Re-encoding an animation as GIF supports up to **30 seconds**, at 15 fps and up to 720 pixels on the longest side. GIF conversion is hidden when the known duration exceeds that limit, and conversions requiring missing tools are hidden too. Unknown animation durations are checked after downloading the source. Original downloads and unchanged native GIF files are not restricted by the conversion limit. Images and MP3/GIF files already in the requested format are kept without re-encoding when supported.
 
 Conversion uses the same inspected source and downloads it once into a private work folder. Only the completed result appears in the output folder. Temporary work is cleaned after success, failure, or cancellation, and completed results are reused.
+
+Original images, extracted audio, and converted files are staged and flushed before publication. Existing files are preserved even when two downloads finish together. Abrupt process termination during staging does not expose a partial file under the final name, though a private work folder may remain after a forced exit.
 
 Direct commands are also available:
 
@@ -159,7 +162,7 @@ Thumbnails must be exposed by the source page. A direct video file often has no 
 .\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
 ```
 
-Tests use temporary local HTTP fixtures. They verify original image/video bytes, audio packet hashes before and after extraction, converted codecs and animation frames, unchanged audio-only files, stream merging, temporary-file cleanup, completed-file preservation, thumbnail fallback, metadata and cookie reuse, and repeated downloads in the terminal. CI installs FFmpeg on Windows and Linux.
+Tests use temporary local HTTP fixtures. They verify original image/video bytes, audio packet hashes before and after extraction, converted codecs and animation frames, unchanged audio-only files, stream merging, temporary-file cleanup, completed-file preservation, thumbnail fallback, metadata and cookie reuse, and repeated downloads in the terminal. Storage tests also force a child process to exit during saving and race concurrent publishers to verify complete outputs and preservation of existing files. CI installs FFmpeg on Windows and Linux.
 
 Source adapters preserve provider metadata before inspection; the Twitter adapter retains the API's declared media type. `inspection.py` describes content and asset roles, `downloader.py` handles original downloads, and `conversions.py` handles optional local transformations. Converters do not extract URLs or choose thumbnails.
 

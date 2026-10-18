@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from pathlib import Path
@@ -12,7 +13,7 @@ from yt_dlp.version import __version__ as ytdlp_version
 
 from . import __version__
 from .dependencies import find_ffmpeg, find_js_runtime
-from .conversions import conversion_kind, conversion_targets
+from .conversions import available_conversions, conversion_kind
 from .downloader import DownloadError, DownloadRequest, download, inspect_media, validate_url
 from .formats import CONVERSIONS, MEDIA_TYPES, normalize_conversion, normalize_type
 
@@ -61,7 +62,7 @@ class _Progress:
 def _show_info(information: dict) -> None:
     print(f"\nTitle: {information.get('title') or 'Untitled'}")
     duration = information.get("duration")
-    if isinstance(duration, (int, float)) and duration >= 0:
+    if isinstance(duration, (int, float)) and math.isfinite(duration) and duration >= 0:
         minutes, seconds = divmod(int(duration), 60)
         print(f"Duration: {minutes}:{seconds:02d}")
 
@@ -82,8 +83,10 @@ def _choose_type(kinds: tuple[str, ...], labels: dict[str, str]) -> str | None:
 
 
 def _choose_output(inspected, kind: str) -> str | None:
-    choices = {"1": "original", **{str(index): target for index, target in enumerate(conversion_targets(inspected, kind), 2)}}
-    print("\n1. Original (recommended)")
+    choices = {"1": "original", **{str(index): target for index, target in enumerate(available_conversions(inspected, kind), 2)}}
+    extension = inspected.original_extension(kind)
+    original = f"Original {extension.upper()}" if extension else "Original"
+    print(f"\n1. {original} (recommended)")
     for index, target in choices.items():
         if target != "original":
             print(f"{index}. {CONVERSIONS[target]}")

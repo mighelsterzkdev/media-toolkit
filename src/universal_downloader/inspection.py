@@ -22,6 +22,7 @@ class MediaInspection:
     image_error: str | None = None
     cookies: tuple = field(default=(), repr=False)
     animation_video: bool = False
+    image_extension: str | None = None
 
     @property
     def image_role(self) -> str:
@@ -33,6 +34,31 @@ class MediaInspection:
     @property
     def labels(self) -> dict[str, str]:
         return {**MEDIA_TYPES, "image": self.image_role.capitalize()}
+
+    def original_extension(self, kind: str) -> str | None:
+        """Describe a known original container without guessing a merged output."""
+        self.validate_format(kind)
+        if kind == "image" and not self.animation_video:
+            return self.image_extension
+        sources = [source for source in self.information.get("formats") or [] if not source.get("has_drm") and source.get("ext") != "mhtml"]
+        if not sources:
+            sources = [self.information]
+        audio_only = [source for source in sources if source.get("vcodec") == "none" and source.get("acodec") != "none"]
+        if kind == "audio":
+            sources = audio_only
+        elif audio_only and not self.animation_video:
+            # The original video may merge separate streams into another
+            # container. Leave the label generic until that result is known.
+            return None
+        else:
+            sources = [source for source in sources if source.get("vcodec") != "none"]
+        extensions = {source.get("ext") for source in sources}
+        if len(extensions) != 1:
+            return None
+        extension = extensions.pop()
+        if isinstance(extension, str) and extension.isascii() and extension.isalnum():
+            return {"jpeg": "jpg", "tif": "tiff"}.get(extension.lower(), extension.lower())
+        return None
 
     def validate_format(self, media_format: str) -> None:
         if media_format not in MEDIA_TYPES:

@@ -12,6 +12,7 @@ from yt_dlp.networking import Request
 from yt_dlp.networking.exceptions import HTTPError, RequestError
 
 from .errors import DownloadError
+from .storage import publish_bytes
 
 MAX_IMAGE_BYTES = 32 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
@@ -131,19 +132,7 @@ def save_image(downloader, information: dict, direct_data: bytes | None = None) 
     extension, _ = check_image(data)
     info = {**information, "title": information.get("title") or "image", "id": information.get("id") or "image", "ext": extension}
     destination = Path(downloader.prepare_filename(info)).resolve()
-    try:
-        output = destination.open("xb")
-    except FileExistsError:
-        if not destination.is_file():
-            raise DownloadError(f"The output path is not a file: {destination}")
-        return destination, True
-    try:
-        with output:
-            output.write(data)
-    except BaseException:
-        destination.unlink(missing_ok=True)
-        raise
-    return destination, False
+    return destination, not publish_bytes(data, destination)
 
 
 def fetch_image(downloader, information: dict, progress_hook=None) -> bytes:

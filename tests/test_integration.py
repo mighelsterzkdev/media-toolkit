@@ -326,7 +326,7 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(main(["--output", str(folder)]), 0)
         self.assertEqual(user_input.call_count, 3)
         self.assertIn("Available: Animation", output.getvalue())
-        self.assertIn("1. Original (recommended)", output.getvalue())
+        self.assertIn("1. Original MP4 (recommended)", output.getvalue())
         self.assertNotIn("Download [1]", output.getvalue())
         self.assertEqual(errors.getvalue(), "")
         files = list(folder.iterdir())
@@ -503,6 +503,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0].read_bytes(), (self.root / "thumbnail.png").read_bytes())
         self.assertEqual(user_input.call_count, 4)
+        self.assertIn("1. Original PNG (recommended)", output.getvalue())
         self.assertIn("Saved:", output.getvalue())
         self.assertEqual(errors.getvalue(), "")
 
