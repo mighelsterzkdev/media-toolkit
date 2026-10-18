@@ -64,31 +64,36 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(request.media_format, kind)
                 self.assertEqual(request.convert_to, "jpg" if target == "JPEG" else target.lower())
 
-    def test_convert_command_opens_separate_format_menu(self):
-        status, _ = self.menu(["convert", self.inspected.url, "2", "2", ""])
+    def test_pasted_url_offers_compatible_formats_after_content_choice(self):
+        status, _ = self.menu([self.inspected.url, "2", "2", ""])
         self.assertEqual(status, 0)
+        self.assertEqual(self.download.call_args.args[0].media_format, "audio")
         self.assertEqual(self.download.call_args.args[0].convert_to, "mp3")
         self.assertIn("Original (recommended)", self.output.getvalue())
+        self.assertIn("MP3 audio", self.output.getvalue())
+        self.assertNotIn("PNG image", self.output.getvalue())
 
-    def test_original_is_still_default_in_conversion_menu(self):
-        status, _ = self.menu(["convert", self.inspected.url, "2", "", ""])
+    def test_original_is_default_in_output_menu(self):
+        status, _ = self.menu([self.inspected.url, "2", "", ""])
         self.assertEqual(status, 0)
         self.assertIsNone(self.download.call_args.args[0].convert_to)
 
-    def test_back_from_conversion_returns_to_original_mode(self):
-        status, _ = self.menu(["convert", self.inspected.url, "3", "0", self.inspected.url, "1", ""])
+    def test_back_from_output_menu_accepts_another_url(self):
+        status, _ = self.menu([self.inspected.url, "3", "0", self.inspected.url, "1", "1", ""])
         self.assertEqual(status, 0)
         self.download.assert_called_once()
         self.assertIsNone(self.download.call_args.args[0].convert_to)
 
-    def test_empty_conversion_url_returns_to_main_prompt(self):
-        status, _ = self.menu(["convert", "", ""])
-        self.assertEqual(status, 0)
-        self.inspect_media.assert_not_called()
+    def test_canceling_output_choice_never_starts_download(self):
+        for interruption, expected_status in ((EOFError, 0), (KeyboardInterrupt, 130)):
+            with self.subTest(interruption=interruption):
+                status, _ = self.menu([self.inspected.url, "1", interruption])
+                self.assertEqual(status, expected_status)
+                self.download.assert_not_called()
 
     def test_animations_do_not_offer_static_image_conversions(self):
         self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Animation"}, ("image",), image_data=b"gif", animated=True)
-        status, _ = self.menu(["convert", self.inspected.url, "2", ""])
+        status, _ = self.menu([self.inspected.url, "2", ""])
         self.assertEqual(status, 0)
         self.assertEqual(self.download.call_args.args[0].convert_to, "gif")
         self.assertNotIn("PNG", self.output.getvalue())
@@ -99,36 +104,71 @@ class CliTests(unittest.TestCase):
         self.assertEqual(main([self.inspected.url, "--convert", "mp3"]), 1)
         self.download.assert_not_called()
 
-    def test_each_type_needs_only_one_choice_without_format_or_quality_menus(self):
+    def test_each_content_type_offers_original_and_compatible_conversion(self):
         for number, kind in (("1", "video"), ("2", "audio"), ("3", "image")):
             with self.subTest(kind=kind):
-                status, user_input = self.menu([self.inspected.url, number, ""])
+                status, user_input = self.menu([self.inspected.url, number, "1", ""])
+                self.assertEqual(status, 0)
+                self.assertEqual(user_input.call_count, 4)
+                self.assertEqual(self.download.call_args.args[0].media_format, kind)
+                self.assertIsNone(self.download.call_args.args[0].convert_to)
+
+    def test_single_type_waits_for_output_choice_before_downloading(self):
+        for kind in ("video", "audio", "image"):
+            with self.subTest(kind=kind):
+                self.inspect_media.reset_mock()
+                self.download.reset_mock()
+                self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Example"}, (kind,))
+                answers = iter([self.inspected.url, "1", ""])
+
+                def answer(prompt):
+                    if prompt.startswith("Save as"):
+                        self.inspect_media.assert_called_once()
+                        self.download.assert_not_called()
+                        self.assertIn("1. Original (recommended)", self.output.getvalue())
+                    return next(answers)
+
+                status, user_input = self.menu(answer)
                 self.assertEqual(status, 0)
                 self.assertEqual(user_input.call_count, 3)
                 self.assertEqual(self.download.call_args.args[0].media_format, kind)
-                prompts = " ".join(call.args[0] for call in user_input.call_args_list)
-                for removed in ("Format", "Quality", "bitrate", "PNG", "MP3"):
-                    self.assertNotIn(removed, prompts)
 
-    def test_single_type_downloads_without_any_choice(self):
-        for kind in ("video", "audio", "image"):
-            with self.subTest(kind=kind):
-                self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Example"}, (kind,))
-                status, user_input = self.menu([self.inspected.url, ""])
-                self.assertEqual(status, 0)
-                self.assertEqual(user_input.call_count, 2)
-                self.assertEqual(self.download.call_args.args[0].media_format, kind)
+    def test_twitter_animation_offers_gif_without_separate_conversion_mode(self):
+        self.inspect_media.return_value = MediaInspection(
+            self.inspected.url, {"title": "Animation", "media_type": "animated_gif", "ext": "mp4"},
+            ("image",), animated=True, animation_video=True,
+        )
+        status, user_input = self.menu([self.inspected.url, "2", ""])
+        self.assertEqual(status, 0)
+        self.assertEqual(user_input.call_count, 3)
+        self.assertEqual(self.download.call_args.args[0].media_format, "image")
+        self.assertEqual(self.download.call_args.args[0].convert_to, "gif")
+        self.assertIn("Available: Animation", self.output.getvalue())
+        self.assertIn("2. GIF animation", self.output.getvalue())
+        self.assertIn("3. MP4 video", self.output.getvalue())
 
-    def test_animated_images_need_no_extra_prompt(self):
-        self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Animation"}, ("image",), image_data=b"gif", animated=True)
-        status, user_input = self.menu([self.inspected.url, ""])
+    def test_single_type_can_return_to_url_without_downloading(self):
+        self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Example"}, ("image",))
+        status, _ = self.menu([self.inspected.url, "0", ""])
+        self.assertEqual(status, 0)
+        self.download.assert_not_called()
+
+    def test_invalid_output_retries_without_inspecting_or_downloading_again(self):
+        self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Example"}, ("audio",))
+        status, _ = self.menu([self.inspected.url, "wrong", "9", "2", ""])
+        self.assertEqual(status, 0)
+        self.inspect_media.assert_called_once()
+        self.download.assert_called_once()
+        self.assertEqual(self.download.call_args.args[0].convert_to, "mp3")
+
+    def test_explicit_conversion_flag_does_not_ask_for_redundant_choice(self):
+        status, user_input = self.menu([self.inspected.url, ""], ["--convert", "mp3"])
         self.assertEqual(status, 0)
         self.assertEqual(user_input.call_count, 2)
-        self.assertEqual(self.download.call_args.args[0].media_format, "image")
-        self.assertIn("Available: Animation", self.output.getvalue())
+        self.assertEqual(self.download.call_args.args[0].convert_to, "mp3")
 
     def test_inspection_precedes_choice_and_is_reused(self):
-        answers = iter([self.inspected.url, "2", ""])
+        answers = iter([self.inspected.url, "2", "1", ""])
 
         def answer(prompt):
             if prompt.startswith("Download"):
@@ -142,13 +182,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.output.getvalue().count("Title: Example"), 1)
 
     def test_multiple_links_run_in_one_session(self):
-        status, _ = self.menu([self.inspected.url, "2", self.inspected.url, "3", ""])
+        status, _ = self.menu([self.inspected.url, "2", "1", self.inspected.url, "3", "1", ""])
         self.assertEqual(status, 0)
         self.assertEqual(self.inspect_media.call_count, 2)
         self.assertEqual([call.args[0].media_format for call in self.download.call_args_list], ["audio", "image"])
 
     def test_invalid_choice_retries_without_rechecking_url(self):
-        status, _ = self.menu([self.inspected.url, "wrong", "9", "2", ""])
+        status, _ = self.menu([self.inspected.url, "wrong", "9", "2", "1", ""])
         self.assertEqual(status, 0)
         self.inspect_media.assert_called_once()
         self.assertEqual(self.download.call_args.args[0].media_format, "audio")
@@ -159,24 +199,24 @@ class CliTests(unittest.TestCase):
         self.download.assert_not_called()
 
     def test_bad_url_returns_to_prompt_instead_of_closing(self):
-        status, user_input = self.menu(["not-a-url", self.inspected.url, "3", ""])
+        status, user_input = self.menu(["not-a-url", self.inspected.url, "3", "1", ""])
         self.assertEqual(status, 0)
-        self.assertEqual(user_input.call_count, 4)
+        self.assertEqual(user_input.call_count, 5)
         self.inspect_media.assert_called_once()
         self.download.assert_called_once()
         self.assertIn("Invalid URL", self.errors.getvalue())
 
     def test_unsupported_url_fails_before_choices_and_accepts_another_link(self):
         self.inspect_media.side_effect = [DownloadError("No media found"), self.inspected]
-        status, user_input = self.menu([self.inspected.url, self.inspected.url, "3", ""])
+        status, user_input = self.menu([self.inspected.url, self.inspected.url, "3", "1", ""])
         self.assertEqual(status, 0)
-        self.assertEqual(user_input.call_count, 4)
+        self.assertEqual(user_input.call_count, 5)
         self.download.assert_called_once()
         self.assertIn("No media found", self.errors.getvalue())
 
     def test_failed_download_does_not_end_session(self):
         self.download.side_effect = [DownloadError("Website unavailable"), self.download.return_value]
-        status, _ = self.menu([self.inspected.url, "1", self.inspected.url, "3", ""])
+        status, _ = self.menu([self.inspected.url, "1", "1", self.inspected.url, "3", "1", ""])
         self.assertEqual(status, 0)
         self.assertEqual(self.download.call_count, 2)
         self.assertIn("Website unavailable", self.errors.getvalue())

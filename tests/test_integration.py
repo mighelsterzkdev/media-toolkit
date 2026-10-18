@@ -278,10 +278,10 @@ class IntegrationTests(unittest.TestCase):
                 download(DownloadRequest(self.url, "audio", folder, "mp3"), inspected=inspected, logger=_SilentLogger())
             self.assertEqual(list(folder.iterdir()), [])
 
-    def test_real_convert_command_keeps_the_original_menu_separate(self):
+    def test_real_menu_converts_audio_after_pasting_url(self):
         from universal_downloader.cli import main
         folder = self.root / "convert-command"
-        answers = ["convert", self.url, "2", "2", ""]
+        answers = [self.url, "2", "2", ""]
         with patch("universal_downloader.cli.sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=answers), contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as errors:
             self.assertEqual(main(["--output", str(folder)]), 0)
         files = list(folder.iterdir())
@@ -319,13 +319,14 @@ class IntegrationTests(unittest.TestCase):
                     self.assertTrue(repeated.already_exists)
                     self.assertEqual({path.resolve() for path in folder.iterdir()}, {result.path.resolve(), legacy_preview.resolve()})
 
-    def test_twitter_animation_works_without_ffmpeg_or_an_extra_menu(self):
+    def test_twitter_animation_waits_for_original_choice_and_works_without_ffmpeg(self):
         from universal_downloader.cli import main
         folder = self.root / "twitter-menu"
-        with self._twitter_animation() as url, patch("universal_downloader.downloader.find_ffmpeg", return_value=None), patch("universal_downloader.cli.sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=[url, ""]) as user_input, contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as errors:
+        with self._twitter_animation() as url, patch("universal_downloader.downloader.find_ffmpeg", return_value=None), patch("universal_downloader.cli.sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=[url, "1", ""]) as user_input, contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as errors:
             self.assertEqual(main(["--output", str(folder)]), 0)
-        self.assertEqual(user_input.call_count, 2)
+        self.assertEqual(user_input.call_count, 3)
         self.assertIn("Available: Animation", output.getvalue())
+        self.assertIn("1. Original (recommended)", output.getvalue())
         self.assertNotIn("Download [1]", output.getvalue())
         self.assertEqual(errors.getvalue(), "")
         files = list(folder.iterdir())
@@ -495,23 +496,27 @@ class IntegrationTests(unittest.TestCase):
     def test_real_menu_checks_first_and_downloads_original_thumbnail(self):
         from universal_downloader.cli import main
         folder = self.root / "real-menu"
-        answers = [self.url.replace("sample.mp4", "page.html"), "3", ""]
+        answers = [self.url.replace("sample.mp4", "page.html"), "3", "1", ""]
         with patch("universal_downloader.cli.sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=answers) as user_input, contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as errors:
             self.assertEqual(main(["--output", str(folder)]), 0)
         files = list(folder.iterdir())
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0].read_bytes(), (self.root / "thumbnail.png").read_bytes())
-        self.assertEqual(user_input.call_count, 3)
+        self.assertEqual(user_input.call_count, 4)
         self.assertIn("Saved:", output.getvalue())
         self.assertEqual(errors.getvalue(), "")
 
     def test_real_menu_continues_after_empty_page_and_downloads_two_images(self):
         from universal_downloader.cli import main
         folder = self.root / "multiple-menu"
-        answers = [self.url.replace("sample.mp4", endpoint) for endpoint in ("empty.html", "thumbnail.png", "animated.gif")] + [""]
+        answers = [
+            self.url.replace("sample.mp4", "empty.html"),
+            self.url.replace("sample.mp4", "thumbnail.png"), "1",
+            self.url.replace("sample.mp4", "animated.gif"), "1", "",
+        ]
         with patch("universal_downloader.cli.sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=answers) as user_input, contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as errors:
             self.assertEqual(main(["--output", str(folder)]), 0)
-        self.assertEqual(user_input.call_count, 4)
+        self.assertEqual(user_input.call_count, 6)
         self.assertEqual(sorted(path.read_bytes() for path in folder.iterdir()), sorted((self.root / endpoint).read_bytes() for endpoint in ("thumbnail.png", "animated.gif")))
         self.assertIn("Error:", errors.getvalue())
         self.assertNotIn("Warning", errors.getvalue())

@@ -81,7 +81,7 @@ def _choose_type(kinds: tuple[str, ...], labels: dict[str, str]) -> str | None:
         print("Invalid option. Try again.")
 
 
-def _choose_conversion(inspected, kind: str) -> str | None:
+def _choose_output(inspected, kind: str) -> str | None:
     choices = {"1": "original", **{str(index): target for index, target in enumerate(conversion_targets(inspected, kind), 2)}}
     print("\n1. Original (recommended)")
     for index, target in choices.items():
@@ -97,7 +97,7 @@ def _choose_conversion(inspected, kind: str) -> str | None:
         print("Invalid option. Try again.")
 
 
-def _save(url: str, args, logger: _Logger, *, interactive: bool, conversion_mode=False) -> None:
+def _save(url: str, args, logger: _Logger, *, interactive: bool) -> None:
     print("\nChecking the URL...")
     target = args.convert
     inspection_type = args.media_type or {"mp3": "audio", "png": "image", "jpg": "image"}.get(target)
@@ -113,8 +113,8 @@ def _save(url: str, args, logger: _Logger, *, interactive: bool, conversion_mode
     if kind is None:
         return
     inspected.validate_format(kind)
-    if conversion_mode and target is None:
-        selection = _choose_conversion(inspected, kind)
+    if interactive and target is None:
+        selection = _choose_output(inspected, kind)
         if selection is None:
             return
         target = None if selection == "original" else selection
@@ -162,18 +162,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if not sys.stdin.isatty():
             parser.error("provide a URL or run without arguments in an interactive terminal")
-        print("\nUNIVERSAL DOWNLOADER\nOriginal downloads (recommended). Type convert for other formats.\n")
+        print("\nUNIVERSAL DOWNLOADER\nCheck a link, then choose the original or another format.\n")
         while True:
             try:
                 raw_url = input("\nPaste the URL (Enter to exit): ").strip()
                 if not raw_url:
                     return 0
-                conversion_mode = raw_url.lower() == "convert"
-                if conversion_mode:
-                    raw_url = input("URL to convert (Enter to go back): ").strip()
-                    if not raw_url:
-                        continue
-                _save(validate_url(raw_url), args, logger, interactive=True, conversion_mode=conversion_mode)
+                _save(validate_url(raw_url), args, logger, interactive=True)
             except DownloadError as error:
                 print(f"\nError: {error}", file=sys.stderr)
             except EOFError:

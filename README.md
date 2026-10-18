@@ -1,12 +1,12 @@
 # Universal Downloader
 
-Paste a link, choose **Video**, **Audio**, or **Image / thumbnail**, and download the original media at the best quality available from the source.
+Paste a link, check the available content, and choose **Original (recommended)** or a compatible format before downloading.
 
 **Python · yt-dlp · FFmpeg · Pillow · Windows / Linux / macOS**
 
 ```text
 UNIVERSAL DOWNLOADER
-Original downloads (recommended). Type convert for other formats.
+Check a link, then choose the original or another format.
 
 Paste the URL (Enter to exit): https://example.com/video
 
@@ -22,6 +22,12 @@ Available: Video, Audio, Thumbnail
 0. Another URL
 Download [1]: 3
 
+1. Original (recommended)
+2. PNG image
+3. JPG image
+0. Another URL
+Save as [1]: 1
+
 Saved:
 .../downloads/My video [identifier] [image].jpg
 
@@ -31,13 +37,13 @@ Paste the URL (Enter to exit):
 ## How it works
 
 - Check the link before offering download choices. Only show verified content.
-- Choose what to download; the app handles the format and quality automatically.
+- Choose the content when a link has multiple kinds, then choose **Original (recommended)** or a compatible conversion. Downloading starts only after that choice.
 - **Video:** keep the source streams and use the best available quality. Separate video and audio streams are merged without re-encoding.
 - **Audio:** download the original audio file when available. If the audio is inside a video, copy its audio stream into a suitable container without re-encoding. An AAC track may become an M4A file; other codecs keep their own compatible container.
 - **Image / thumbnail:** save the exact original bytes of the best reachable image, keeping its format, transparency, metadata, and animation.
 - The menu names the detected asset: **Image**, **Thumbnail**, or **Animation**. A video's static cover is separate from its primary media.
 - **Twitter/X GIFs:** recognize the animated media asset and show **Animation**. If the source delivers the animation as MP4, keep that animated MP4, without downloading its static JPEG preview or converting it to GIF. The image download command handles these animations automatically.
-- A link containing only one kind of media downloads immediately, without a choice menu.
+- Even a link containing only one kind of media shows the output menu before downloading. Press Enter to select the recommended original, or **0** to choose another URL.
 - Completed files are kept and reported as **Already downloaded**.
 - After a download or a failed link, paste another URL in the same session. Enter on an empty URL exits; **0** goes back from the download menu.
 - Reuse inspected metadata, cookies created by the source website, and image bytes when downloading.
@@ -47,7 +53,17 @@ Original downloads do not ask for encoding settings. "Original" means the media 
 
 ## Optional conversion
 
-Paste links normally to keep the original media. For a different format, type **convert** at the URL prompt, paste a link, and choose what to save. This separate menu keeps **Original (recommended)** as the default and only offers compatible conversions:
+Every link pasted into the interactive session shows **Original (recommended)** as option **1**, followed by compatible conversions. There is no separate conversion mode. For example, an animation offers:
+
+```text
+1. Original (recommended)
+2. GIF animation
+3. MP4 video
+0. Another URL
+Save as [1]:
+```
+
+The available formats depend on the detected content:
 
 | Detected content | Optional formats |
 | --- | --- |
