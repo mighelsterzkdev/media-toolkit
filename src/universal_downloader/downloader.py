@@ -22,6 +22,7 @@ from .images import IMAGE_EXTENSIONS, check_image, fetch_image, looks_like_image
 from .inspection import MediaInspection, inspect_streams
 from .media import AUDIO_EXTENSIONS, NativeAudio, original_path
 from .sources import configure_sources, is_video_animation
+from .tiktok import is_tiktok_sound_url
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,9 @@ def _read_information(downloader, url: str) -> tuple[dict, bytes | None]:
     else:
         try:
             information, data = downloader.extract_info(url, download=False), None
-        except YtDlpError:
+        except YtDlpError as error:
+            if is_tiktok_sound_url(url):
+                raise DownloadError(f"Could not retrieve this TikTok sound: {error}") from error
             information, data = page_or_image(downloader, url)
     _check_information(information, image=True)
     if not (information.get("thumbnails") or information.get("thumbnail") or information.get("image_url")) and (
@@ -223,6 +226,11 @@ def download(
             for cookie in inspected.cookies:
                 downloader.cookiejar.set_cookie(deepcopy(cookie))
             information = deepcopy(inspected.information)
+            # Inspection already generated these compatibility aliases. Let
+            # yt-dlp recreate them from the canonical lists when reprocessing.
+            for field in ("artist", "album_artist", "composer", "creator", "genre"):
+                if f"{field}s" in information:
+                    information.pop(field, None)
             if image_file:
                 path, exists = save_image(downloader, information, inspected.image_data)
                 return DownloadResult(information.get("title", path.stem), path, exists)

@@ -4,6 +4,8 @@ from urllib.parse import urlsplit
 
 from yt_dlp.extractor.twitter import TwitterIE
 
+from .tiktok import TikTokAudioIE
+
 
 class _TwitterMediaIE(TwitterIE):
     """Retain the API's media type, which the standard extractor omits."""
@@ -33,6 +35,7 @@ class _TwitterMediaIE(TwitterIE):
 
 def configure_sources(downloader) -> None:
     downloader.add_info_extractor(_TwitterMediaIE())
+    downloader.add_info_extractor(TikTokAudioIE())
 
 
 def is_video_animation(information: dict) -> bool:

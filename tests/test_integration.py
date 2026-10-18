@@ -177,6 +177,120 @@ class IntegrationTests(unittest.TestCase):
         with patch("yt_dlp.extractor.twitter.TwitterIE._extract_status", return_value=status), patch.object(YoutubeDL, "urlopen", new=route):
             yield "https://x.com/gif_test/status/1234567890123456789"
 
+    @contextlib.contextmanager
+    def _tiktok_sound(self, *, direct=False, tagged_id=None, playable=True, video_count=1):
+        """Serve official page structures locally through the real extractors."""
+        sound_id = "7697963541225163528"
+        sound_url = f"https://www.tiktok.com/music/som-original-{sound_id}"
+        base = self.url.removesuffix("sample.mp4")
+        music = {
+            "id": tagged_id or sound_id, "title": "Original sound", "authorName": "Sound Test",
+            "duration": 1, "coverLarge": base + "thumbnail.png",
+        }
+        if playable:
+            music["playUrl"] = base + "song.mp3"
+        state = {"__DEFAULT_SCOPE__": {
+            "desktop.musicPage.musicDetail": {"musicInfo": {"music": music}},
+        }} if direct else {"__DEFAULT_SCOPE__": {"webapp.app-context": {}}}
+        embed_state = {"source": {"data": {f"/embed/music/{sound_id}": {
+            "isError": False, "embedInfo": {"id": sound_id, "statusCode": 0},
+            "videoList": [{
+                "id": str(7697963498839575815 + index), "authorUniqueId": "sound_test",
+                "playAddr": base + "sample.mp4",
+            } for index in range(video_count)],
+        }}}}
+        video_state = {"__DEFAULT_SCOPE__": {"webapp.video-detail": {
+            "statusCode": 0, "itemInfo": {"itemStruct": {
+                "music": music, "video": {"playAddr": base + "sample.mp4"},
+            }},
+        }}}
+        trace = []
+        original_urlopen = YoutubeDL.urlopen
+        with tempfile.TemporaryDirectory(prefix="tiktok-fixture-", dir=self.root) as temporary:
+            folder = Path(temporary)
+            for name, script_id, payload in (
+                ("sound", "__UNIVERSAL_DATA_FOR_REHYDRATION__", state),
+                ("embed", "__FRONTITY_CONNECT_STATE__", embed_state),
+                ("video", "__UNIVERSAL_DATA_FOR_REHYDRATION__", video_state),
+            ):
+                (folder / f"{name}.html").write_text(
+                    '<html><head><meta property="og:image" content="' + base + 'thumbnail.png"></head>'
+                    f'<body><script id="{script_id}" type="application/json">'
+                    + json.dumps(payload) + "</script></body></html>", encoding="utf-8",
+                )
+
+            def route(downloader, request):
+                url = request if isinstance(request, str) else request.url
+                name = None
+                if url == sound_url:
+                    name = "sound"
+                elif url == f"https://www.tiktok.com/embed/music/{sound_id}":
+                    name = "embed"
+                elif url.startswith("https://www.tiktok.com/@_/video/"):
+                    name = "video"
+                if name:
+                    trace.append(name)
+                    request = Request(base + folder.name + f"/{name}.html", headers=dict(request.headers) if not isinstance(request, str) else {})
+                elif not url.startswith(base):
+                    raise AssertionError(f"Unexpected external request in TikTok fixture: {url}")
+                return original_urlopen(downloader, request)
+
+            with patch.object(YoutubeDL, "urlopen", new=route):
+                yield sound_url, trace
+
+    def test_tiktok_sound_resolves_exact_audio_and_reuses_inspected_metadata(self):
+        with self._tiktok_sound() as (url, trace):
+            _SilentHandler.requests.clear()
+            inspected = inspect_media(url, logger=_SilentLogger())
+            self.assertEqual(inspected.kinds, ("audio",))
+            self.assertEqual(inspected.original_extension("audio"), "mp3")
+            self.assertEqual(inspected.information["id"], "7697963541225163528")
+            self.assertEqual(trace, ["sound", "embed", "video"])
+            request = DownloadRequest(url, "audio", self.root / "tiktok-original")
+            result = download(request, inspected=inspected, logger=_SilentLogger())
+            converted = download(DownloadRequest(url, "audio", self.root / "tiktok-mp3", "mp3"), inspected=inspected, logger=_SilentLogger())
+            repeated = download(request, inspected=inspected, logger=_SilentLogger())
+            self.assertTrue(repeated.already_exists)
+            self.assertEqual(trace, ["sound", "embed", "video"])
+            self.assertEqual(inspected.information["artists"], ["Sound Test"])
+            self.assertEqual(inspected.information["artist"], "Sound Test")
+            self.assertEqual(result.path.suffix, ".mp3")
+            self.assertEqual(result.path.read_bytes(), (self.root / "song.mp3").read_bytes())
+            self.assertEqual(converted.path.read_bytes(), result.path.read_bytes())
+            self.assertNotIn("/sample.mp4", _SilentHandler.requests)
+            self.assertNotIn("/thumbnail.png", _SilentHandler.requests)
+
+    def test_tiktok_hydrated_sound_page_does_not_fetch_associated_posts(self):
+        with self._tiktok_sound(direct=True) as (url, trace):
+            inspected = inspect_media(url, logger=_SilentLogger())
+            self.assertEqual(inspected.kinds, ("audio",))
+            self.assertEqual(trace, ["sound"])
+
+    def test_tiktok_sound_menu_waits_for_choice_and_saves_original_mp3(self):
+        from universal_downloader.cli import main
+        folder = self.root / "tiktok-menu"
+        with self._tiktok_sound() as (url, trace), patch("universal_downloader.cli.sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=[url, "1", ""]) as user_input, contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(main(["--output", str(folder)]), 0)
+        self.assertEqual(user_input.call_count, 3)
+        self.assertIn("Available: Audio", output.getvalue())
+        self.assertIn("1. Original MP3 (recommended)", output.getvalue())
+        self.assertEqual(errors.getvalue(), "")
+        files = list(folder.iterdir())
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].read_bytes(), (self.root / "song.mp3").read_bytes())
+
+    def test_tiktok_missing_or_mismatched_audio_never_falls_back_to_video_or_cover(self):
+        for options in ({"tagged_id": "999", "video_count": 5}, {"playable": False}):
+            with self.subTest(options=options), self._tiktok_sound(**options) as (url, trace), patch("universal_downloader.downloader.page_or_image") as fallback:
+                _SilentHandler.requests.clear()
+                with self.assertRaisesRegex(DownloadError, "TikTok sound"):
+                    inspect_media(url, logger=_SilentLogger())
+                fallback.assert_not_called()
+                self.assertEqual(trace.count("video"), 3 if options.get("video_count") else 1)
+                self.assertNotIn("/sample.mp4", _SilentHandler.requests)
+                self.assertNotIn("/song.mp3", _SilentHandler.requests)
+                self.assertNotIn("/thumbnail.png", _SilentHandler.requests)
+
     def test_twitter_api_type_survives_a_change_to_the_asset_url(self):
         with self._twitter_animation("https://video.twimg.com/new_media_route/fixture.mp4") as url:
             inspected = inspect_media(url, media_format="image", logger=_SilentLogger())

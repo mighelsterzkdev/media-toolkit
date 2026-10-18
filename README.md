@@ -43,6 +43,7 @@ Paste the URL (Enter to exit):
 - **Image / thumbnail:** save the exact original bytes of the best reachable image, keeping its format, transparency, metadata, and animation.
 - The menu names the detected asset: **Image**, **Thumbnail**, or **Animation**. A video's static cover is separate from its primary media.
 - **Twitter/X GIFs:** recognize the animated media asset and show **Animation**. If the source delivers the animation as MP4, keep that animated MP4, without downloading its static JPEG preview or converting it to GIF. The image download command handles these animations automatically.
+- **TikTok sound links:** `/music/...` pages resolve to their original audio, with the usual recommended download and optional conversion menu. The adapter uses the sound's public metadata or checks associated posts for the exact same sound ID. It downloads the tagged audio file, preserving its format; it does not substitute a video's mixed audio or a cover image. Unavailable sounds produce an audio-specific error.
 - Even a link containing only one kind of media shows the output menu before downloading. Press Enter to select the recommended original, or **0** to choose another URL.
 - The recommended option includes the original format when it is known, such as **Original MP4** or **Original PNG**. Merged video and extracted audio keep a generic label when their final container cannot be identified in advance.
 - Completed files are kept and reported as **Already downloaded**.
@@ -164,7 +165,7 @@ Thumbnails must be exposed by the source page. A direct video file often has no 
 
 Tests use temporary local HTTP fixtures. They verify original image/video bytes, audio packet hashes before and after extraction, converted codecs and animation frames, unchanged audio-only files, stream merging, temporary-file cleanup, completed-file preservation, thumbnail fallback, metadata and cookie reuse, and repeated downloads in the terminal. Storage tests also force a child process to exit during saving and race concurrent publishers to verify complete outputs and preservation of existing files. CI installs FFmpeg on Windows and Linux.
 
-Source adapters preserve provider metadata before inspection; the Twitter adapter retains the API's declared media type. `inspection.py` describes content and asset roles, `downloader.py` handles original downloads, and `conversions.py` handles optional local transformations. Converters do not extract URLs or choose thumbnails.
+Source adapters preserve provider metadata before inspection; the Twitter adapter retains the API's declared media type, and `tiktok.py` resolves public sound metadata while verifying sound IDs. TikTok metadata lookup checks at most three associated posts and uses yt-dlp's existing web extractor. Site restrictions can still prevent access. `inspection.py` describes content and asset roles, `downloader.py` handles original downloads, and `conversions.py` handles optional local transformations. Converters do not extract URLs or choose thumbnails.
 
 The launcher and test commands use `-B` to avoid source bytecode caches. Keep **.venv/** and **.tools/** to run without reinstalling. **tests/** and **.github/workflows/** contain automated checks. Downloaded media, caches, and generated package metadata are excluded from Git.
 
