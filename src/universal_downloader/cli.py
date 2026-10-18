@@ -28,7 +28,8 @@ class _Logger:
             print(message, file=sys.stderr)
 
     def warning(self, message: str) -> None:
-        print(f"\nWarning: {message}", file=sys.stderr)
+        if self.verbose:
+            print(f"\nWarning: {message}", file=sys.stderr)
 
     def error(self, message: str) -> None:
         # DownloadError is displayed once by main().
@@ -232,8 +233,6 @@ def main(argv: list[str] | None = None) -> int:
                 )
         _validate_options(parser, media_format, args)
         inspected.validate_format(media_format)
-        if media_format not in ("video", "audio") and media_format not in IMAGE_FORMATS:
-            print("The selected format will be encoded locally. Conversion can take a while for large files.")
         result = download(
             DownloadRequest(url, media_format, quality, args.output, audio_bitrate, args.image_quality or 90, args.source_format),
             progress_hook=_Progress(), logger=logger, inspected=inspected,
