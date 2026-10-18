@@ -3,15 +3,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from universal_downloader.downloader import DownloadError, DownloadRequest, download, validate_url
+from universal_downloader.downloader import DownloadError, DownloadRequest, download, inspect_media, validate_url
+from universal_downloader.inspection import MediaInspection
 
 
 class InputTests(unittest.TestCase):
-    def test_urls_preserve_query_and_trim_clipboard_whitespace(self):
-        self.assertEqual(
-            validate_url("  https://example.com/watch?v=abc&list=123\n"),
-            "https://example.com/watch?v=abc&list=123",
-        )
+    def test_clipboard_urls_trim_whitespace_and_surrounding_quotes(self):
+        for value in (
+            "  https://example.com/watch?v=abc&list=123\n",
+            '"https://example.com/watch?v=abc&list=123"',
+            "'https://example.com/watch?v=abc&list=123'",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(validate_url(value), "https://example.com/watch?v=abc&list=123")
 
     def test_invalid_urls_are_rejected(self):
         for url in (
@@ -24,9 +28,15 @@ class InputTests(unittest.TestCase):
                 validate_url(url)
 
     @patch("universal_downloader.downloader.YoutubeDL")
-    def test_invalid_request_does_not_start_network_access(self, downloader):
+    def test_invalid_requests_fail_before_network_access(self, downloader):
+        for request in (
+            DownloadRequest("not a url"), DownloadRequest("https://example.com/video", "zip"),
+            DownloadRequest("https://example.com/video", "mp3"), DownloadRequest("https://example.com/video", "png"),
+        ):
+            with self.subTest(request=request), self.assertRaises(DownloadError):
+                download(request)
         with self.assertRaises(DownloadError):
-            download(DownloadRequest("not a url"))
+            inspect_media("https://example.com/video", media_format="png")
         downloader.assert_not_called()
 
     @patch("universal_downloader.downloader.find_ffmpeg", return_value=None)
@@ -36,30 +46,12 @@ class InputTests(unittest.TestCase):
             download(DownloadRequest("https://example.com/video"))
         downloader.assert_not_called()
 
-    def test_invalid_format_and_quality_fail_early(self):
-        for media_format, quality in (("zip", "best"), ("video", "999"), ("mp3", "720")):
-            with self.subTest(format=media_format, quality=quality), self.assertRaises(DownloadError):
-                download(DownloadRequest("https://example.com/video", media_format, quality))
-
     @patch("universal_downloader.downloader.YoutubeDL")
-    def test_invalid_extended_options_fail_before_network_access(self, downloader):
-        for settings in (
-            {"audio_bitrate": "999"}, {"media_format": "flac", "audio_bitrate": "320"},
-            {"image_quality": 0}, {"image_quality": 96},
-            {"media_format": "png", "image_quality": 80},
-            {"source_format": ""}, {"source_format": "bad\nvalue"},
-            {"source_format": "123", "quality": "720"},
-            {"media_format": "png", "source_format": "123"},
-        ):
-            with self.subTest(settings=settings), self.assertRaises(DownloadError):
-                download(DownloadRequest("https://example.com/video", **settings))
+    def test_inspection_cannot_be_reused_for_another_url(self, downloader):
+        inspected = MediaInspection("https://example.com/one", {"title": "One"}, ("video",))
+        with self.assertRaisesRegex(DownloadError, "does not match"):
+            download(DownloadRequest("https://example.com/two"), inspected=inspected)
         downloader.assert_not_called()
-
-    @patch("universal_downloader.downloader.find_ffmpeg", return_value=Path("."))
-    @patch("universal_downloader.downloader.find_js_runtime", return_value=None)
-    def test_malformed_source_selector_has_a_readable_error(self, runtime, ffmpeg):
-        with tempfile.TemporaryDirectory() as temporary, self.assertRaisesRegex(DownloadError, "source format selector"):
-            download(DownloadRequest("https://example.com/video", source_format="[", output_dir=Path(temporary)))
 
     @patch("universal_downloader.downloader.find_ffmpeg", return_value=Path("."))
     @patch("universal_downloader.downloader.find_js_runtime", return_value=None)
@@ -69,13 +61,14 @@ class InputTests(unittest.TestCase):
         for information in (
             {"_type": "playlist", "entries": []},
             {"_type": "multi_video", "entries": []},
-            {"title": "Live", "is_live": True},
-            {"title": "Premiere", "live_status": "is_upcoming"},
+            {"title": "Live", "is_live": True, "url": "https://example.com/video"},
+            {"title": "Premiere", "live_status": "is_upcoming", "url": "https://example.com/video"},
         ):
             with self.subTest(information=information), tempfile.TemporaryDirectory() as temporary:
                 downloader.extract_info.return_value = information
                 with self.assertRaises(DownloadError):
-                    download(DownloadRequest("https://example.com/video", output_dir=Path(temporary)))
+                    download(DownloadRequest("https://example.com/video", output_dir=Path(temporary) / "new"))
+                self.assertFalse((Path(temporary) / "new").exists())
                 downloader.process_ie_result.assert_not_called()
 
 

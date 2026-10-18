@@ -10,5 +10,5 @@ pushd "%~dp0"
 "%~dp0.venv\Scripts\python.exe" -B -X utf8 -m universal_downloader %*
 set "result=%errorlevel%"
 popd
-if "%~1"=="" set /p "_unidownExit=Press Enter to close..."
+if "%~1"=="" if not "%result%"=="0" if not "%result%"=="130" set /p "_unidownExit=Press Enter to close..."
 exit /b %result%

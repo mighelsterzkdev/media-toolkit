@@ -1,4 +1,4 @@
-"""Download thumbnails or direct image URLs and encode real image formats."""
+"""Verify and save original image bytes without modifying the source image."""
 
 from hashlib import sha256
 from html.parser import HTMLParser
@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import unquote, urljoin, urlsplit
 import warnings
 
-from PIL import Image, ImageOps, UnidentifiedImageError, features
+from PIL import Image, UnidentifiedImageError
 from yt_dlp.networking import Request
 from yt_dlp.networking.exceptions import HTTPError, RequestError
 
@@ -19,18 +19,6 @@ IMAGE_EXTENSIONS = {
     "JPEG": "jpg", "PNG": "png", "WEBP": "webp", "AVIF": "avif", "GIF": "gif",
     "BMP": "bmp", "TIFF": "tiff", "ICO": "ico", "MPO": "jpg",
 }
-PIL_FORMATS = {
-    "jpg": "JPEG", "png": "PNG", "webp": "WEBP", "avif": "AVIF", "gif": "GIF",
-    "bmp": "BMP", "tiff": "TIFF", "ico": "ICO",
-}
-
-
-def available_image_formats() -> list[str]:
-    Image.init()
-    codecs = {"jpg": "jpg", "png": "zlib", "webp": "webp", "avif": "avif", "tiff": "libtiff"}
-    return [key for key, name in PIL_FORMATS.items() if name in Image.SAVE and (key not in codecs or features.check(codecs[key]))]
-
-
 class _PageImages(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -137,79 +125,25 @@ def page_or_image(downloader, url: str, progress_hook=None) -> tuple[dict, bytes
     return info, data
 
 
-def _encode(data: bytes, media_format: str, quality: int) -> tuple[bytes, str]:
-    extension, animated = check_image(data)
-    if media_format == "image":
-        return data, extension
-    if animated:
-        raise DownloadError("Animated images can be saved with --format image (original). Conversion supports static images.")
-    if media_format not in available_image_formats():
-        raise DownloadError(f"{media_format.upper()} encoding is not available. Run install.cmd to update the image engine.")
+def save_image(downloader, information: dict, direct_data: bytes | None = None) -> tuple[Path, bool]:
+    """Save the verified source bytes, keeping format, metadata, and animation."""
+    data = direct_data if direct_data is not None else fetch_image(downloader, information)
+    extension, _ = check_image(data)
+    info = {**information, "title": information.get("title") or "image", "id": information.get("id") or "image", "ext": extension}
+    destination = Path(downloader.prepare_filename(info)).resolve()
     try:
-        with Image.open(BytesIO(data)) as opened:
-            image = ImageOps.exif_transpose(opened).convert("RGBA")
-        image.info.clear()
-        if media_format in ("jpg", "bmp"):
-            flattened = Image.new("RGB", image.size, "white")
-            flattened.paste(image, mask=image.getchannel("A"))
-            image.close()
-            image = flattened
-        elif media_format == "ico":
-            image.thumbnail((256, 256), Image.Resampling.LANCZOS)
-            side = max(image.size)
-            square = Image.new("RGBA", (side, side))
-            square.paste(image, ((side - image.width) // 2, (side - image.height) // 2))
-            image.close()
-            image = square
-        options = {}
-        if media_format in ("jpg", "webp", "avif"):
-            options["quality"] = quality
-        if media_format in ("jpg", "png", "gif"):
-            options["optimize"] = True
-        if media_format == "tiff":
-            options["compression"] = "tiff_lzw"
-        if media_format == "ico":
-            options["sizes"] = [(image.width, image.height)]
-        try:
-            output = BytesIO()
-            image.save(output, PIL_FORMATS[media_format], **options)
-            return output.getvalue(), media_format
-        finally:
-            image.close()
-    except (OSError, ValueError, KeyError) as error:
-        raise DownloadError(f"Could not convert the image to {media_format.upper()}: {error}") from error
-
-
-def save_image(downloader, information, media_format, quality, direct_data=None, progress_hook=None) -> Path:
-    """Try thumbnails from highest resolution to lowest, without downloading media."""
-    info = {**information, "title": information.get("title") or "image", "id": information.get("id") or "image"}
-    if media_format != "image":
-        existing = Path(downloader.prepare_filename({**info, "ext": media_format})).resolve()
-        if existing.is_file():
-            return existing
-
-    def save(data):
-        encoded, extension = _encode(data, media_format, quality)
-        destination = Path(downloader.prepare_filename({**info, "ext": extension})).resolve()
-        try:
-            output = destination.open("xb")
-        except FileExistsError:
-            if not destination.is_file():
-                raise DownloadError(f"The output path is not a file: {destination}")
-        else:
-            try:
-                with output:
-                    output.write(encoded)
-            except BaseException:
-                destination.unlink(missing_ok=True)
-                raise
-        if progress_hook:
-            progress_hook({"status": "finished", "filename": str(destination)})
-        return destination
-
-    if direct_data is not None:
-        return save(direct_data)
-    return save(fetch_image(downloader, information, progress_hook))
+        output = destination.open("xb")
+    except FileExistsError:
+        if not destination.is_file():
+            raise DownloadError(f"The output path is not a file: {destination}")
+        return destination, True
+    try:
+        with output:
+            output.write(data)
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
+    return destination, False
 
 
 def fetch_image(downloader, information: dict, progress_hook=None) -> bytes:

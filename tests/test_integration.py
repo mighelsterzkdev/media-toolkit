@@ -16,9 +16,8 @@ from unittest.mock import patch
 from PIL import Image
 
 from universal_downloader.dependencies import find_ffmpeg
-from universal_downloader.downloader import DownloadError, DownloadRequest, download, inspect_media, inspect_url
+from universal_downloader.downloader import DownloadError, DownloadRequest, download, inspect_media
 from yt_dlp import YoutubeDL
-from universal_downloader.formats import AUDIO_FORMATS, IMAGE_FORMATS, VIDEO_FORMATS
 
 
 class _SilentHandler(SimpleHTTPRequestHandler):
@@ -78,7 +77,11 @@ class IntegrationTests(unittest.TestCase):
         cls.ffprobe = cls.tools / f"ffprobe{suffix}"
         cls.fixture = cls.root / "sample.mp4"
         Image.new("RGBA", (320, 180), (25, 90, 180, 100)).save(cls.root / "thumbnail.png")
-        Image.new("RGB", (40, 30), "green").save(cls.root / "small.jpg")
+        exif = Image.Exif()
+        exif[270] = "Original image metadata"
+        Image.new("RGB", (40, 30), "green").save(cls.root / "small.jpg", exif=exif)
+        for extension in ("webp", "avif", "bmp", "tiff", "ico"):
+            Image.new("RGBA", (32, 32), (25, 90, 180, 100)).save(cls.root / f"original.{extension}")
         (cls.root / "page.html").write_text(
             '<html><head><title>Test video</title><meta property="og:title" content="Test video">'
             '<meta property="og:image" content="/thumbnail.png"></head><body>'
@@ -112,6 +115,14 @@ class IntegrationTests(unittest.TestCase):
         ], check=True, capture_output=True, timeout=30)
         subprocess.run([
             str(cls.ffmpeg), "-hide_banner", "-loglevel", "error", "-i", str(cls.fixture),
+            "-c:a", "libopus", "-vn", str(cls.root / "song.webm"),
+        ], check=True, capture_output=True, timeout=30)
+        subprocess.run([
+            str(cls.ffmpeg), "-hide_banner", "-loglevel", "error", "-i", str(cls.fixture),
+            "-c:v", "copy", "-c:a", "mp2", str(cls.root / "uncommon.mkv"),
+        ], check=True, capture_output=True, timeout=30)
+        subprocess.run([
+            str(cls.ffmpeg), "-hide_banner", "-loglevel", "error", "-i", str(cls.fixture),
             "-c:v", "libx264", "-c:a", "aac", "-f", "dash", str(cls.root / "manifest.mpd"),
         ], check=True, capture_output=True, timeout=30, cwd=cls.root)
         handler = functools.partial(_SilentHandler, directory=str(cls.root))
@@ -128,100 +139,20 @@ class IntegrationTests(unittest.TestCase):
         ], check=True, capture_output=True, text=True, timeout=15)
         return json.loads(result.stdout)
 
-    def test_every_audio_format_produces_the_expected_codec(self):
-        codecs = {"mp3": "mp3", "m4a": "aac", "aac": "aac", "opus": "opus", "ogg": "vorbis", "flac": "flac", "wav": "pcm_s16le", "alac": "alac", "audio": "aac"}
-        self.assertEqual(set(codecs), set(AUDIO_FORMATS))
-        for media_format, codec in codecs.items():
-            with self.subTest(format=media_format):
-                request = DownloadRequest(self.url, media_format, output_dir=self.root / f"all-audio-{media_format}")
-                result = download(request, logger=_SilentLogger())
-                streams = self._probe(result.path)["streams"]
-                self.assertEqual([stream["codec_type"] for stream in streams], ["audio"])
-                self.assertEqual(streams[0]["codec_name"], codec)
-                self.assertEqual(result.path.suffix, ".m4a" if media_format in ("alac", "audio") else f".{media_format}")
-                modified = result.path.stat().st_mtime_ns
-                again = download(request, logger=_SilentLogger())
-                self.assertEqual(again.path.stat().st_mtime_ns, modified)
-                self.assertEqual(list(result.path.parent.iterdir()), [result.path])
+    def _packet_hashes(self, path, stream):
+        result = subprocess.run([
+            str(self.ffprobe), "-v", "error", "-select_streams", stream,
+            "-show_packets", "-show_data_hash", "sha256",
+            "-show_entries", "packet=data_hash", "-of", "json", str(path),
+        ], check=True, capture_output=True, text=True, timeout=15)
+        return [packet["data_hash"] for packet in json.loads(result.stdout)["packets"]]
 
-    def test_every_video_container_has_valid_video_and_audio(self):
-        codecs = {"mp4": "h264", "mkv": "h264", "webm": "vp9", "mov": "h264", "avi": "mpeg4", "m4v": "h264", "flv": "flv1", "ts": "h264"}
-        self.assertEqual(set(codecs), set(VIDEO_FORMATS) - {"video"})
-        for media_format, codec in codecs.items():
-            with self.subTest(format=media_format):
-                request = DownloadRequest(self.url, media_format, output_dir=self.root / f"all-video-{media_format}")
-                result = download(request, logger=_SilentLogger())
-                streams = self._probe(result.path)["streams"]
-                self.assertEqual({stream["codec_type"] for stream in streams}, {"video", "audio"})
-                video = next(stream for stream in streams if stream["codec_type"] == "video")
-                self.assertEqual(video["codec_name"], codec)
-                self.assertEqual(result.path.suffix, f".{media_format}")
-                modified = result.path.stat().st_mtime_ns
-                again = download(request, logger=_SilentLogger())
-                self.assertEqual(again.path.stat().st_mtime_ns, modified)
-                self.assertEqual(list(result.path.parent.iterdir()), [result.path])
-
-    def test_every_thumbnail_format_is_an_actual_image_and_does_not_fetch_video(self):
-        expected = {"jpg": "JPEG", "png": "PNG", "webp": "WEBP", "avif": "AVIF", "gif": "GIF", "bmp": "BMP", "tiff": "TIFF", "ico": "ICO", "image": "PNG"}
-        self.assertEqual(set(expected), set(IMAGE_FORMATS))
-        page = self.url.replace("sample.mp4", "page.html")
-        for media_format, image_format in expected.items():
-            with self.subTest(format=media_format):
-                _SilentHandler.requests.clear()
-                with patch("universal_downloader.downloader.find_ffmpeg", return_value=None):
-                    request = DownloadRequest(page, media_format, output_dir=self.root / f"all-images-{media_format}")
-                    result = download(request, logger=_SilentLogger())
-                with Image.open(result.path) as image:
-                    image.load()
-                    self.assertEqual(image.format, image_format)
-                    if media_format != "ico":
-                        self.assertEqual(image.size, (320, 180))
-                    else:
-                        self.assertLessEqual(max(image.size), 256)
-                self.assertNotIn("/sample.mp4", _SilentHandler.requests)
-                self.assertEqual(list(result.path.parent.iterdir()), [result.path])
-                modified = result.path.stat().st_mtime_ns
-                again = download(request, logger=_SilentLogger())
-                self.assertEqual(again.path.stat().st_mtime_ns, modified)
-
-    def test_direct_image_and_extensionless_image_urls(self):
-        for endpoint in ("thumbnail.png", "image-without-extension"):
-            with self.subTest(endpoint=endpoint):
-                result = download(DownloadRequest(self.url.replace("sample.mp4", endpoint), "webp", output_dir=self.root / f"direct-{endpoint}"), logger=_SilentLogger())
-                with Image.open(result.path) as image:
-                    self.assertEqual(image.format, "WEBP")
-                    self.assertEqual(image.size, (320, 180))
-
-    def test_open_graph_fallback_for_page_without_a_video(self):
-        result = download(DownloadRequest(self.url.replace("sample.mp4", "image-page.html"), "jpg", output_dir=self.root / "og-fallback"), logger=_SilentLogger())
-        with Image.open(result.path) as image:
-            self.assertEqual(image.format, "JPEG")
-            self.assertTrue(all(abs(value - expected) < 10 for value, expected in zip(image.getpixel((0, 0)), (165, 190, 226))))
-
-    def test_source_format_inspection_does_not_save_any_files(self):
-        info = inspect_url(self.url.replace("sample.mp4", "page.html"), logger=_SilentLogger())
-        self.assertTrue(info.get("formats"))
-        self.assertTrue(info.get("thumbnails") or info.get("thumbnail"))
-
-    def test_real_terminal_menu_downloads_an_avif_thumbnail(self):
-        from universal_downloader.cli import main
-        folder = self.root / "real-menu"
-        with patch("universal_downloader.cli.sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=[self.url.replace("sample.mp4", "page.html"), "3", "4"]), contextlib.redirect_stdout(io.StringIO()) as output:
-            self.assertEqual(main(["--output", str(folder)]), 0)
-        files = list(folder.iterdir())
-        self.assertEqual(len(files), 1)
-        with Image.open(files[0]) as image:
-            self.assertEqual(image.format, "AVIF")
-        self.assertIn("Done! File saved to:", output.getvalue())
-
-    def test_preflight_detects_real_content_including_silent_video(self):
+    def test_preflight_detects_actual_content_including_silent_video(self):
         for endpoint, kinds in (
             ("page.html", ("video", "audio", "image")),
-            ("sample.mp4", ("video", "audio")),
-            ("silent.mp4", ("video",)),
-            ("song.m4a", ("audio",)),
-            ("thumbnail.png", ("image",)),
-            ("image-without-extension", ("image",)),
+            ("sample.mp4", ("video", "audio")), ("silent.mp4", ("video",)),
+            ("song.m4a", ("audio",)), ("song.webm", ("audio",)),
+            ("thumbnail.png", ("image",)), ("image-without-extension", ("image",)),
             ("image-page.html", ("image",)),
         ):
             with self.subTest(endpoint=endpoint):
@@ -229,25 +160,59 @@ class IntegrationTests(unittest.TestCase):
                 self.assertEqual(inspected.kinds, kinds)
                 if "video" in kinds:
                     self.assertEqual(inspected.heights, (48,))
-                if "image" in kinds:
-                    self.assertTrue(inspected.image_data)
 
-    def test_preflight_image_is_reused_without_refetching_or_video_download(self):
+    def test_direct_video_keeps_original_bytes_and_codecs(self):
+        result = download(DownloadRequest(self.url, output_dir=self.root / "video"), logger=_SilentLogger())
+        self.assertEqual(result.path.read_bytes(), self.fixture.read_bytes())
+        self.assertEqual({stream["codec_type"] for stream in self._probe(result.path)["streams"]}, {"video", "audio"})
+        self.assertFalse(result.already_exists)
+
+    def test_audio_extraction_copies_packets_without_quality_loss(self):
+        for endpoint, codec, extension in (("sample.mp4", "aac", ".m4a"), ("uncommon.mkv", "mp2", ".mka")):
+            with self.subTest(codec=codec):
+                result = download(DownloadRequest(self.url.replace("sample.mp4", endpoint), "audio", self.root / f"extracted-{codec}"), logger=_SilentLogger())
+                streams = self._probe(result.path)["streams"]
+                self.assertEqual([stream["codec_type"] for stream in streams], ["audio"])
+                self.assertEqual(streams[0]["codec_name"], codec)
+                self.assertEqual(result.path.suffix, extension)
+                self.assertEqual(self._packet_hashes(self.root / endpoint, "a:0"), self._packet_hashes(result.path, "a:0"))
+                self.assertEqual(list(result.path.parent.iterdir()), [result.path])
+
+    def test_audio_only_files_keep_original_container_and_bytes(self):
+        for endpoint in ("song.m4a", "song.webm"):
+            with self.subTest(endpoint=endpoint):
+                result = download(DownloadRequest(self.url.replace("sample.mp4", endpoint), "audio", self.root / f"native-{endpoint}"), logger=_SilentLogger())
+                self.assertEqual(result.path.suffix, Path(endpoint).suffix)
+                self.assertEqual(result.path.read_bytes(), (self.root / endpoint).read_bytes())
+                self.assertEqual(list(result.path.parent.iterdir()), [result.path])
+
+    def test_image_formats_keep_exact_original_bytes_metadata_and_animation(self):
+        for endpoint in ("thumbnail.png", "small.jpg", "original.webp", "original.avif", "animated.gif", "original.bmp", "original.tiff", "original.ico"):
+            with self.subTest(endpoint=endpoint), patch("universal_downloader.downloader.find_ffmpeg", return_value=None):
+                result = download(DownloadRequest(self.url.replace("sample.mp4", endpoint), "image", self.root / "original-images"), logger=_SilentLogger())
+                self.assertEqual(result.path.read_bytes(), (self.root / endpoint).read_bytes())
+                self.assertEqual(result.path.suffix, Path(endpoint).suffix)
+                with Image.open(result.path) as image:
+                    image.load()
+                    if endpoint == "animated.gif":
+                        self.assertEqual(image.n_frames, 2)
+                    if endpoint == "small.jpg":
+                        self.assertEqual(image.getexif().get(270), "Original image metadata")
+
+    def test_explicit_thumbnail_skips_video_probe_and_reuses_image_bytes(self):
         for endpoint in ("thumbnail.png", "image-without-extension", "image-page.html", "page.html"):
             with self.subTest(endpoint=endpoint):
                 _SilentHandler.requests.clear()
                 url = self.url.replace("sample.mp4", endpoint)
-                inspected = inspect_media(url, media_format="webp", logger=_SilentLogger())
-                requests = list(_SilentHandler.requests)
-                result = download(DownloadRequest(url, "webp", output_dir=self.root / f"prepared-{endpoint}"), inspected=inspected, logger=_SilentLogger())
+                with patch("universal_downloader.downloader.find_ffmpeg", return_value=None):
+                    inspected = inspect_media(url, media_format="image", logger=_SilentLogger())
+                    requests = list(_SilentHandler.requests)
+                    result = download(DownloadRequest(url, "image", self.root / f"prepared-{endpoint}"), inspected=inspected, logger=_SilentLogger())
                 self.assertEqual(_SilentHandler.requests, requests)
                 self.assertNotIn("/sample.mp4", requests)
-                if endpoint != "image-without-extension":
-                    self.assertEqual(requests.count("/thumbnail.png"), 1)
-                with Image.open(result.path) as image:
-                    self.assertEqual(image.format, "WEBP")
+                self.assertEqual(result.path.read_bytes(), (self.root / "thumbnail.png").read_bytes())
 
-    def test_preflight_metadata_is_reused_with_new_download_options(self):
+    def test_inspection_metadata_is_reused_for_video_audio_and_image(self):
         url = self.url.replace("sample.mp4", "page.html")
         calls = []
         original = YoutubeDL.extract_info
@@ -259,65 +224,50 @@ class IntegrationTests(unittest.TestCase):
         with patch.object(YoutubeDL, "extract_info", new=tracked):
             inspected = inspect_media(url, logger=_SilentLogger())
             inspected_calls = list(calls)
-            audio = download(DownloadRequest(url, "mp3", output_dir=self.root / "prepared-audio"), inspected=inspected, logger=_SilentLogger())
-            source_id = inspected.information["formats"][0]["format_id"]
-            video = download(DownloadRequest(url, "mp4", output_dir=self.root / "prepared-video", source_format=source_id), inspected=inspected, logger=_SilentLogger())
+            for kind in ("video", "audio", "image"):
+                result = download(DownloadRequest(url, kind, self.root / f"reused-{kind}"), inspected=inspected, logger=_SilentLogger())
+                self.assertTrue(result.path.is_file())
             self.assertEqual(calls, inspected_calls)
-        self.assertEqual([stream["codec_type"] for stream in self._probe(audio.path)["streams"]], ["audio"])
-        self.assertEqual({stream["codec_type"] for stream in self._probe(video.path)["streams"]}, {"audio", "video"})
         self.assertFalse(inspected.information.get("filepath"))
 
-    def test_invalid_page_fails_before_real_menu_asks_any_options(self):
-        from universal_downloader.cli import main
-        folder = self.root / "invalid-menu"
-        with patch("universal_downloader.cli.sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=[self.url.replace("sample.mp4", "empty.html")]) as user_input, contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as errors:
-            self.assertEqual(main(["--output", str(folder)]), 1)
-        self.assertEqual(user_input.call_count, 1)
-        self.assertIn("No thumbnail or image", errors.getvalue())
-        self.assertFalse(folder.exists())
+    def test_repeated_downloads_preserve_completed_files_and_report_existing(self):
+        for endpoint, kind in (("sample.mp4", "video"), ("sample.mp4", "audio"), ("thumbnail.png", "image")):
+            with self.subTest(kind=kind):
+                url = self.url.replace("sample.mp4", endpoint)
+                inspected = inspect_media(url, media_format=kind, logger=_SilentLogger())
+                request = DownloadRequest(url, kind, self.root / f"repeat-{kind}")
+                first = download(request, inspected=inspected, logger=_SilentLogger())
+                modified = first.path.stat().st_mtime_ns
+                _SilentHandler.requests.clear()
+                second = download(request, inspected=inspected, logger=_SilentLogger())
+                self.assertEqual(first.path, second.path)
+                self.assertEqual(second.path.stat().st_mtime_ns, modified)
+                self.assertTrue(second.already_exists)
+                self.assertEqual(list(second.path.parent.iterdir()), [second.path])
+                self.assertEqual(_SilentHandler.requests, [])
 
-    def test_silent_audio_request_is_rejected_before_download_and_output_creation(self):
+    def test_silent_video_downloads_without_offering_or_attempting_audio(self):
         url = self.url.replace("sample.mp4", "silent.mp4")
         inspected = inspect_media(url, logger=_SilentLogger())
-        folder = self.root / "silent-preflight"
+        self.assertEqual(inspected.kinds, ("video",))
+        folder = self.root / "silent-audio"
         _SilentHandler.requests.clear()
         with self.assertRaisesRegex(DownloadError, "No audio track"):
-            download(DownloadRequest(url, "mp3", output_dir=folder), inspected=inspected, logger=_SilentLogger())
+            download(DownloadRequest(url, "audio", folder), inspected=inspected, logger=_SilentLogger())
         self.assertFalse(folder.exists())
         self.assertEqual(_SilentHandler.requests, [])
+        result = download(DownloadRequest(url, output_dir=self.root / "silent-video"), inspected=inspected, logger=_SilentLogger())
+        self.assertEqual(result.path.read_bytes(), (self.root / "silent.mp4").read_bytes())
 
-    def test_preflight_animated_image_and_corrupt_image(self):
-        inspected = inspect_media(self.url.replace("sample.mp4", "animated.gif"), logger=_SilentLogger())
-        self.assertTrue(inspected.animated)
-        with self.assertRaisesRegex(DownloadError, "Animated"):
-            inspected.validate_format("png")
-        with self.assertRaisesRegex(DownloadError, "readable image"):
-            inspect_media(self.url.replace("sample.mp4", "broken.png"), logger=_SilentLogger())
-
-    def test_inspection_session_cookies_are_preserved_for_probe_and_download(self):
-        url = self.url.replace("sample.mp4", "cookie-page.html")
-        inspected = inspect_media(url, logger=_SilentLogger())
-        self.assertEqual(inspected.kinds, ("video", "audio"))
-        self.assertTrue(inspected.cookies)
-        result = download(DownloadRequest(url, output_dir=self.root / "session-video"), inspected=inspected, logger=_SilentLogger())
-        self.assertEqual(result.path.read_bytes(), self.fixture.read_bytes())
-
-    def test_source_format_id_can_be_downloaded(self):
-        info = inspect_url(self.url, logger=_SilentLogger())
-        source_format = info["formats"][0]["format_id"]
-        result = download(DownloadRequest(self.url, source_format=source_format, output_dir=self.root / "source-id"), logger=_SilentLogger())
-        self.assertEqual(result.path.read_bytes(), self.fixture.read_bytes())
-
-    def test_explicit_video_and_audio_ids_can_be_combined(self):
-        url = self.url.replace("sample.mp4", "manifest.mpd")
-        info = inspect_url(url, logger=_SilentLogger())
-        video = next(item for item in info["formats"] if item.get("vcodec") != "none" and item.get("acodec") == "none")
-        audio = next(item for item in info["formats"] if item.get("vcodec") == "none" and item.get("acodec") != "none")
-        selector = f"{video['format_id']}+{audio['format_id']}"
-        result = download(DownloadRequest(url, "mp4", source_format=selector, output_dir=self.root / "combined-ids"), logger=_SilentLogger())
+    def test_separate_dash_streams_are_merged_without_reencoding(self):
+        manifest = self.root / "manifest.mpd"
+        result = download(DownloadRequest(self.url.replace("sample.mp4", "manifest.mpd"), output_dir=self.root / "merged"), logger=_SilentLogger())
         self.assertEqual({stream["codec_type"] for stream in self._probe(result.path)["streams"]}, {"video", "audio"})
+        for stream in ("v:0", "a:0"):
+            self.assertEqual(self._packet_hashes(manifest, stream), self._packet_hashes(result.path, stream))
+        self.assertEqual(list(result.path.parent.iterdir()), [result.path])
 
-    def test_best_thumbnail_falls_back_after_http_failure(self):
+    def test_thumbnail_uses_best_reachable_original_after_http_failure(self):
         base = self.url.removesuffix("sample.mp4")
         information = {
             "id": "fallback", "title": "Best image", "webpage_url": base + "page.html",
@@ -330,113 +280,61 @@ class IntegrationTests(unittest.TestCase):
         }
         _SilentHandler.requests.clear()
         with patch("universal_downloader.downloader.YoutubeDL.extract_info", return_value=information):
-            result = download(DownloadRequest(base + "page.html", "png", output_dir=self.root / "best-thumb"), logger=_SilentLogger())
-        with Image.open(result.path) as image:
-            self.assertEqual(image.size, (320, 180))
-            self.assertEqual(image.getpixel((10, 10))[3], 100)
+            result = download(DownloadRequest(base + "page.html", "image", self.root / "best-thumb"), logger=_SilentLogger())
+        self.assertEqual(result.path.read_bytes(), (self.root / "thumbnail.png").read_bytes())
         self.assertEqual(_SilentHandler.requests, ["/missing.jpg", "/thumbnail.png"])
 
-    def test_original_animated_image_is_preserved_and_conversion_is_rejected(self):
-        url = self.url.replace("sample.mp4", "animated.gif")
-        result = download(DownloadRequest(url, "image", output_dir=self.root / "animation"), logger=_SilentLogger())
-        self.assertEqual(result.path.read_bytes(), (self.root / "animated.gif").read_bytes())
-        with Image.open(result.path) as image:
-            self.assertEqual(image.n_frames, 2)
-        with self.assertRaisesRegex(DownloadError, "Animated"):
-            download(DownloadRequest(url, "webp", output_dir=self.root / "animation-conversion"), logger=_SilentLogger())
+    def test_corrupt_oversized_and_unavailable_images_fail_before_creating_output(self):
+        for endpoint, message in (("broken.png", "readable image"), ("large.png", "32 MB"), ("no-thumbnail.html", "thumbnail"), ("empty.html", "image")):
+            with self.subTest(endpoint=endpoint):
+                folder = self.root / f"invalid-{endpoint}"
+                with self.assertRaisesRegex(DownloadError, message):
+                    download(DownloadRequest(self.url.replace("sample.mp4", endpoint), "image", folder), logger=_SilentLogger())
+                self.assertFalse(folder.exists())
 
-    def test_missing_thumbnail_and_corrupt_image_have_readable_errors(self):
-        for endpoint in ("no-thumbnail.html", "broken.png"):
-            with self.subTest(endpoint=endpoint), self.assertRaises(DownloadError):
-                download(DownloadRequest(self.url.replace("sample.mp4", endpoint), "png", output_dir=self.root / f"bad-{endpoint}"), logger=_SilentLogger())
-
-    def test_image_pixel_limit_is_enforced(self):
+    def test_image_pixel_limit_is_checked_before_saving(self):
+        folder = self.root / "pixel-limit"
         with patch("universal_downloader.images.MAX_IMAGE_PIXELS", 100), self.assertRaisesRegex(DownloadError, "pixel limit"):
-            download(DownloadRequest(self.url.replace("sample.mp4", "thumbnail.png"), "png", output_dir=self.root / "pixel-limit"), logger=_SilentLogger())
+            download(DownloadRequest(self.url.replace("sample.mp4", "thumbnail.png"), "image", folder), logger=_SilentLogger())
+        self.assertFalse(folder.exists())
 
-    def test_unavailable_image_encoder_has_a_readable_error(self):
-        with patch("universal_downloader.images.available_image_formats", return_value=["png"]), self.assertRaisesRegex(DownloadError, "encoding is not available"):
-            download(DownloadRequest(self.url.replace("sample.mp4", "thumbnail.png"), "avif", output_dir=self.root / "missing-encoder"), logger=_SilentLogger())
-
-    def test_audio_request_for_silent_video_fails_without_a_completed_output(self):
-        folder = self.root / "silent-audio"
-        with self.assertRaises(DownloadError):
-            download(DownloadRequest(self.url.replace("sample.mp4", "silent.mp4"), "mp3", output_dir=folder), logger=_SilentLogger())
-        self.assertFalse(list(folder.glob("*.mp3")))
-        self.assertFalse(list(folder.glob(".unidown-*")))
-
-    def test_audio_bitrate_creates_distinct_valid_outputs(self):
-        folder = self.root / "bitrates"
-        results = [download(DownloadRequest(self.url, "mp3", output_dir=folder, audio_bitrate=bitrate), logger=_SilentLogger()) for bitrate in ("128", "320")]
-        self.assertNotEqual(results[0].path, results[1].path)
-        self.assertEqual([int(self._probe(result.path)["streams"][0]["bit_rate"]) for result in results], [128000, 320000])
-
-    def test_image_size_limit_returns_a_readable_error(self):
-        with self.assertRaisesRegex(DownloadError, "32 MB"):
-            download(DownloadRequest(self.url.replace("sample.mp4", "large.png"), "png", output_dir=self.root / "size-limit"), logger=_SilentLogger())
-
-    def test_video_download_preserves_video_and_audio(self):
-        result = download(DownloadRequest(self.url, output_dir=self.root / "video"), logger=_SilentLogger())
+    def test_session_cookies_are_kept_for_probe_and_download(self):
+        url = self.url.replace("sample.mp4", "cookie-page.html")
+        inspected = inspect_media(url, logger=_SilentLogger())
+        self.assertEqual(inspected.kinds, ("video", "audio"))
+        self.assertTrue(inspected.cookies)
+        result = download(DownloadRequest(url, output_dir=self.root / "session-video"), inspected=inspected, logger=_SilentLogger())
         self.assertEqual(result.path.read_bytes(), self.fixture.read_bytes())
-        streams = self._probe(result.path)["streams"]
-        self.assertEqual({stream["codec_type"] for stream in streams}, {"video", "audio"})
 
-    def test_mp3_is_real_audio_with_no_video(self):
-        result = download(
-            DownloadRequest(self.url, "mp3", output_dir=self.root / "audio"), logger=_SilentLogger(),
-        )
-        self.assertEqual(result.path.suffix, ".mp3")
-        probe = self._probe(result.path)
-        self.assertGreater(float(probe["format"]["duration"]), 0)
-        self.assertEqual([stream["codec_name"] for stream in probe["streams"]], ["mp3"])
-        self.assertFalse(list(result.path.parent.glob("*.mp4")))
+    def test_real_menu_checks_first_and_downloads_original_thumbnail(self):
+        from universal_downloader.cli import main
+        folder = self.root / "real-menu"
+        answers = [self.url.replace("sample.mp4", "page.html"), "3", ""]
+        with patch("universal_downloader.cli.sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=answers) as user_input, contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(main(["--output", str(folder)]), 0)
+        files = list(folder.iterdir())
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].read_bytes(), (self.root / "thumbnail.png").read_bytes())
+        self.assertEqual(user_input.call_count, 3)
+        self.assertIn("Saved:", output.getvalue())
+        self.assertEqual(errors.getvalue(), "")
 
-    def test_repeated_video_does_not_overwrite_completed_file(self):
-        request = DownloadRequest(self.url, output_dir=self.root / "repeat")
-        first = download(request, logger=_SilentLogger())
-        modified = first.path.stat().st_mtime_ns
-        second = download(request, logger=_SilentLogger())
-        self.assertEqual(first.path, second.path)
-        self.assertEqual(second.path.stat().st_mtime_ns, modified)
+    def test_real_menu_continues_after_empty_page_and_downloads_two_images(self):
+        from universal_downloader.cli import main
+        folder = self.root / "multiple-menu"
+        answers = [self.url.replace("sample.mp4", endpoint) for endpoint in ("empty.html", "thumbnail.png", "animated.gif")] + [""]
+        with patch("universal_downloader.cli.sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=answers) as user_input, contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(main(["--output", str(folder)]), 0)
+        self.assertEqual(user_input.call_count, 4)
+        self.assertEqual(sorted(path.read_bytes() for path in folder.iterdir()), sorted((self.root / endpoint).read_bytes() for endpoint in ("thumbnail.png", "animated.gif")))
+        self.assertIn("Error:", errors.getvalue())
+        self.assertNotIn("Warning", errors.getvalue())
 
-    def test_resolution_limit_works_with_direct_media(self):
-        result = download(
-            DownloadRequest(self.url, quality="480", output_dir=self.root / "quality"),
-            logger=_SilentLogger(),
-        )
-        self.assertTrue(result.path.is_file())
-
-    def test_silent_video_can_be_downloaded(self):
-        result = download(
-            DownloadRequest(self.url.replace("sample.mp4", "silent.mp4"), output_dir=self.root / "silent"),
-            logger=_SilentLogger(),
-        )
-        self.assertEqual([stream["codec_type"] for stream in self._probe(result.path)["streams"]], ["video"])
-
-    def test_separate_dash_video_and_audio_are_merged(self):
-        result = download(
-            DownloadRequest(self.url.replace("sample.mp4", "manifest.mpd"), output_dir=self.root / "dash"),
-            logger=_SilentLogger(),
-        )
-        self.assertIn(result.path.suffix, (".mp4", ".mkv"))
-        self.assertEqual(
-            {stream["codec_type"] for stream in self._probe(result.path)["streams"]}, {"video", "audio"},
-        )
-
-    def test_repeated_mp3_does_not_overwrite_completed_file(self):
-        request = DownloadRequest(self.url, "mp3", output_dir=self.root / "repeat-audio")
-        first = download(request, logger=_SilentLogger())
-        modified = first.path.stat().st_mtime_ns
-        second = download(request, logger=_SilentLogger())
-        self.assertEqual(second.path.stat().st_mtime_ns, modified)
-        self.assertFalse(list(second.path.parent.glob("*.mp4")))
-
-    def test_http_failure_returns_user_facing_error(self):
-        with self.assertRaisesRegex(DownloadError, "Download failed"):
-            download(
-                DownloadRequest(self.url.replace("sample.mp4", "missing.mp4"), output_dir=self.root / "missing"),
-                logger=_SilentLogger(),
-            )
+    def test_http_failure_returns_a_readable_error_without_output(self):
+        folder = self.root / "missing-video"
+        with self.assertRaises(DownloadError):
+            download(DownloadRequest(self.url.replace("sample.mp4", "missing.mp4"), output_dir=folder), logger=_SilentLogger())
+        self.assertFalse(folder.exists())
 
 
 if __name__ == "__main__":

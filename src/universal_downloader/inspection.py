@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .errors import DownloadError
-from .formats import AUDIO_FORMATS, IMAGE_FORMATS
+from .formats import MEDIA_TYPES
 
 
 @dataclass(frozen=True)
@@ -23,7 +23,9 @@ class MediaInspection:
     cookies: tuple = field(default=(), repr=False)
 
     def validate_format(self, media_format: str) -> None:
-        kind = "image" if media_format in IMAGE_FORMATS else "audio" if media_format in AUDIO_FORMATS else "video"
+        if media_format not in MEDIA_TYPES:
+            raise DownloadError("Choose video, audio, or image. Files keep their original format.")
+        kind = media_format
         if kind not in self.kinds:
             message = {
                 "video": "No downloadable video was found at this URL.",
@@ -31,8 +33,6 @@ class MediaInspection:
                 "image": self.image_error or "No readable image or thumbnail was found at this URL.",
             }[kind]
             raise DownloadError(message)
-        if kind == "image" and self.animated and media_format != "image":
-            raise DownloadError("Animated images can only be saved in their original format. Use --format image.")
 
 
 def _probe_streams(source: dict, information: dict, ffmpeg: Path, cookiejar=None) -> dict | None:
