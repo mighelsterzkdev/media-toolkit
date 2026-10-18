@@ -6,6 +6,7 @@ import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .errors import DownloadError
 from .formats import MEDIA_TYPES
@@ -21,11 +22,14 @@ class MediaInspection:
     animated: bool = False
     image_error: str | None = None
     cookies: tuple = field(default=(), repr=False)
+    animation_video: bool = False
 
     def validate_format(self, media_format: str) -> None:
         if media_format not in MEDIA_TYPES:
             raise DownloadError("Choose video, audio, or image. Files keep their original format.")
         kind = media_format
+        if self.animation_video and kind == "video":
+            return
         if kind not in self.kinds:
             message = {
                 "video": "No downloadable video was found at this URL.",
@@ -33,6 +37,26 @@ class MediaInspection:
                 "image": self.image_error or "No readable image or thumbnail was found at this URL.",
             }[kind]
             raise DownloadError(message)
+
+
+def is_video_animation(information: dict) -> bool:
+    """Recognize an animation delivered as video, without guessing from silence."""
+    sources = information.get("formats") or [information]
+    sources = [source for source in sources if source.get("url") and not source.get("has_drm")]
+    if not sources:
+        return False
+    if information.get("media_type") in ("animated_gif", "gif"):
+        return True
+    for source in sources:
+        try:
+            url = urlsplit(source["url"])
+        except ValueError:
+            continue
+        # Twitter's GIF asset is distinct from its static tweet_video_thumb
+        # preview and from ordinary (including silent) ext_tw_video clips.
+        if url.hostname == "video.twimg.com" and url.path.startswith("/tweet_video/") and url.path.lower().endswith(".mp4"):
+            return True
+    return False
 
 
 def _probe_streams(source: dict, information: dict, ffmpeg: Path, cookiejar=None) -> dict | None:

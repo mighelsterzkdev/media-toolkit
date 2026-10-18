@@ -17,7 +17,7 @@ from .dependencies import find_ffmpeg, find_js_runtime
 from .errors import DownloadError
 from .formats import MEDIA_TYPES, normalize_type
 from .images import IMAGE_EXTENSIONS, check_image, fetch_image, looks_like_image, page_or_image, save_image
-from .inspection import MediaInspection, inspect_streams
+from .inspection import MediaInspection, inspect_streams, is_video_animation
 from .media import AUDIO_EXTENSIONS, NativeAudio, original_path
 
 
@@ -109,12 +109,13 @@ def inspect_media(url: str, *, media_format: str | None = None, logger=None) -> 
         with YoutubeDL(options) as downloader:
             information, data = _read_information(downloader, url)
             live = information.get("is_live") or information.get("live_status") == "is_upcoming"
+            animation_video = not live and is_video_animation(information)
             video, audio, heights = False, False, ()
-            if not live and media_format != "image":
+            if not live and not animation_video and media_format != "image":
                 video, audio, heights = inspect_streams(information, find_ffmpeg(), downloader.cookiejar)
             image_error = None
-            animated = False
-            if media_format is None or media_format == "image":
+            animated = bool(animation_video)
+            if not animation_video and (media_format is None or media_format == "image"):
                 try:
                     if data is None and media_format == "image" and not (information.get("image_url") or information.get("thumbnails") or information.get("thumbnail")):
                         information, data = page_or_image(downloader, url)
@@ -123,7 +124,12 @@ def inspect_media(url: str, *, media_format: str | None = None, logger=None) -> 
                 except DownloadError as error:
                     image_error = str(error)
                     data = None
-            kinds = tuple(kind for kind, available in (("video", video), ("audio", audio), ("image", data is not None)) if available)
+            if animation_video:
+                kinds = ("image",)
+            else:
+                kinds = tuple(kind for kind, available in (
+                    ("video", video), ("audio", audio), ("image", data is not None),
+                ) if available)
             if not kinds:
                 if live and media_format != "image":
                     raise DownloadError("Wait for the live stream or premiere to finish, then try again.")
@@ -131,6 +137,7 @@ def inspect_media(url: str, *, media_format: str | None = None, logger=None) -> 
             result = MediaInspection(
                 url, information, kinds, heights, data, animated, image_error,
                 tuple(deepcopy(cookie) for cookie in downloader.cookiejar),
+                animation_video=bool(animation_video),
             )
             if media_format:
                 result.validate_format(media_format)
@@ -178,7 +185,10 @@ def download(
     except OSError as error:
         raise DownloadError(f"Could not create the output directory: {error}") from error
 
+    image_file = kind == "image" and not inspected.animation_video
     qualifier = f" [{kind}]" if kind != "video" else ""
+    if inspected.animation_video:
+        qualifier = " [animation]"
     source_tag = ".source" if kind == "audio" else ""
     options = {
         **_common_options(logger),
@@ -186,8 +196,10 @@ def download(
         "outtmpl": {"default": f"%(title).100B [%(id).40B]{qualifier}{source_tag}.%(ext)s"},
         "progress_hooks": [progress_hook] if progress_hook else [],
     }
-    if kind == "image":
+    if image_file:
         options.update(skip_download=True, ignore_no_formats_error=True)
+    elif inspected.animation_video:
+        options["format"] = "bestvideo/best"
     else:
         options["format"] = "bestaudio/best" if kind == "audio" else "bestvideo+bestaudio/best/bestvideo"
     results: list[tuple[Path, bool]] = []
@@ -196,7 +208,7 @@ def download(
             for cookie in inspected.cookies:
                 downloader.cookiejar.set_cookie(deepcopy(cookie))
             information = deepcopy(inspected.information)
-            if kind == "image":
+            if image_file:
                 path, exists = save_image(downloader, information, inspected.image_data)
                 return DownloadResult(information.get("title", path.stem), path, exists)
             if kind == "audio":

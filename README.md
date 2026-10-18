@@ -35,6 +35,7 @@ Paste the URL (Enter to exit):
 - **Video:** keep the source streams and use the best available quality. Separate video and audio streams are merged without re-encoding.
 - **Audio:** download the original audio file when available. If the audio is inside a video, copy its audio stream into a suitable container without re-encoding. An AAC track may become an M4A file; other codecs keep their own compatible container.
 - **Image / thumbnail:** save the exact original bytes of the best reachable image, keeping its format, transparency, metadata, and animation.
+- **Twitter/X GIFs:** recognize the animated media asset and show **Animation**. If the source delivers the animation as MP4, keep that animated MP4, without downloading its static JPEG preview or converting it to GIF. The image download command handles these animations automatically.
 - A link containing only one kind of media downloads immediately, without a choice menu.
 - Completed files are kept and reported as **Already downloaded**.
 - After a download or a failed link, paste another URL in the same session. Enter on an empty URL exits; **0** goes back from the download menu.

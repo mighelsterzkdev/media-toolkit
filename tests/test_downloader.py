@@ -4,10 +4,22 @@ from pathlib import Path
 from unittest.mock import patch
 
 from universal_downloader.downloader import DownloadError, DownloadRequest, download, inspect_media, validate_url
-from universal_downloader.inspection import MediaInspection
+from universal_downloader.inspection import MediaInspection, is_video_animation
 
 
 class InputTests(unittest.TestCase):
+    def test_twitter_animation_assets_are_distinct_from_silent_videos_and_posters(self):
+        for url, animated in (
+            ("https://video.twimg.com/tweet_video/clip.mp4?tag=12", True),
+            ("https://video.twimg.com/ext_tw_video/123/pu/vid/clip.mp4", False),
+            ("https://video.twimg.com/amplify_video/123/vid/clip.mp4", False),
+            ("https://pbs.twimg.com/tweet_video_thumb/clip.jpg", False),
+            ("https://video.twimg.com.example.com/tweet_video/clip.mp4", False),
+            ("http://[invalid", False),
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(is_video_animation({"formats": [{"url": url}]}), animated)
+
     def test_clipboard_urls_trim_whitespace_and_surrounding_quotes(self):
         for value in (
             "  https://example.com/watch?v=abc&list=123\n",

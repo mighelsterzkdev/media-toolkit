@@ -82,6 +82,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(user_input.call_count, 2)
         self.assertEqual(self.download.call_args.args[0].media_format, "image")
+        self.assertIn("Available: Animation", self.output.getvalue())
 
     def test_inspection_precedes_choice_and_is_reused(self):
         answers = iter([self.inspected.url, "2", ""])

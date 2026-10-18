@@ -62,11 +62,11 @@ def _show_info(information: dict) -> None:
         print(f"Duration: {minutes}:{seconds:02d}")
 
 
-def _choose_type(kinds: tuple[str, ...]) -> str | None:
+def _choose_type(kinds: tuple[str, ...], labels: dict[str, str]) -> str | None:
     if len(kinds) == 1:
         return kinds[0]
     choices = {str(index): kind for index, kind in enumerate(kinds, 1)}
-    print("\n" + "\n".join(f"{index}. {MEDIA_TYPES[kind]}" for index, kind in choices.items()))
+    print("\n" + "\n".join(f"{index}. {labels[kind]}" for index, kind in choices.items()))
     print("0. Another URL")
     while True:
         answer = input("Download [1]: ").strip() or "1"
@@ -81,10 +81,11 @@ def _save(url: str, args, logger: _Logger, *, interactive: bool) -> None:
     print("\nChecking the URL...")
     inspected = inspect_media(url, media_format=args.media_type, logger=logger)
     _show_info(inspected.information)
-    print("Available: " + ", ".join(MEDIA_TYPES[kind] for kind in inspected.kinds))
+    labels = {**MEDIA_TYPES, "image": "Animation" if inspected.animated else MEDIA_TYPES["image"]}
+    print("Available: " + ", ".join(labels[kind] for kind in inspected.kinds))
     kind = args.media_type
     if kind is None:
-        kind = _choose_type(inspected.kinds) if interactive else inspected.kinds[0]
+        kind = _choose_type(inspected.kinds, labels) if interactive else inspected.kinds[0]
     if kind is None:
         return
     inspected.validate_format(kind)

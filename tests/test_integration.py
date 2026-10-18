@@ -18,6 +18,7 @@ from PIL import Image
 from universal_downloader.dependencies import find_ffmpeg
 from universal_downloader.downloader import DownloadError, DownloadRequest, download, inspect_media
 from yt_dlp import YoutubeDL
+from yt_dlp.networking import Request
 
 
 class _SilentHandler(SimpleHTTPRequestHandler):
@@ -146,6 +147,75 @@ class IntegrationTests(unittest.TestCase):
             "-show_entries", "packet=data_hash", "-of", "json", str(path),
         ], check=True, capture_output=True, text=True, timeout=15)
         return [packet["data_hash"] for packet in json.loads(result.stdout)["packets"]]
+
+    @contextlib.contextmanager
+    def _twitter_animation(self):
+        """Use the real Twitter extractor with a local API and media fixture."""
+        base = self.url.removesuffix("sample.mp4")
+        media_url = "https://video.twimg.com/tweet_video/fixture.mp4"
+        status = {
+            "full_text": "animated clip", "user": {"name": "GIF Test", "screen_name": "gif_test"},
+            "extended_entities": {"media": [{
+                "id_str": "1234567890123456788", "type": "animated_gif",
+                "media_url_https": base + "small.jpg",
+                "video_info": {"variants": [{"url": media_url, "content_type": "video/mp4"}]},
+            }]},
+        }
+        original_urlopen = YoutubeDL.urlopen
+
+        def route(downloader, request):
+            url = request if isinstance(request, str) else request.url
+            if url == media_url:
+                request = Request(base + "silent.mp4", headers=dict(request.headers) if not isinstance(request, str) else {})
+            elif not url.startswith(base):
+                raise AssertionError(f"Unexpected external network request in fixture: {url}")
+            return original_urlopen(downloader, request)
+
+        with patch("yt_dlp.extractor.twitter.TwitterIE._extract_status", return_value=status), patch.object(YoutubeDL, "urlopen", new=route):
+            yield "https://x.com/gif_test/status/1234567890123456789"
+
+    def test_twitter_gif_keeps_animation_instead_of_downloading_its_jpeg_preview(self):
+        with self._twitter_animation() as url:
+            for selected in (None, "image", "video"):
+                with self.subTest(selected=selected):
+                    _SilentHandler.requests.clear()
+                    inspected = inspect_media(url, media_format=selected, logger=_SilentLogger())
+                    self.assertEqual(inspected.kinds, ("image",))
+                    self.assertTrue(inspected.animated)
+                    self.assertTrue(inspected.animation_video)
+                    self.assertIsNone(inspected.image_data)
+                    self.assertEqual(_SilentHandler.requests, [])
+                    folder = self.root / f"twitter-{selected}"
+                    folder.mkdir()
+                    legacy_preview = folder / f"{inspected.information['title']} [{inspected.information['id']}] [image].jpg"
+                    preview_bytes = (self.root / "small.jpg").read_bytes()
+                    legacy_preview.write_bytes(preview_bytes)
+                    request = DownloadRequest(url, selected or "image", folder)
+                    result = download(request, inspected=inspected, logger=_SilentLogger())
+                    self.assertEqual(result.path.suffix, ".mp4")
+                    self.assertEqual(result.path.read_bytes(), (self.root / "silent.mp4").read_bytes())
+                    self.assertEqual([stream["codec_type"] for stream in self._probe(result.path)["streams"]], ["video"])
+                    self.assertGreater(len(self._packet_hashes(result.path, "v:0")), 1)
+                    self.assertFalse(result.already_exists)
+                    self.assertNotIn("/small.jpg", _SilentHandler.requests)
+                    self.assertEqual(legacy_preview.read_bytes(), preview_bytes)
+                    repeated = download(request, inspected=inspected, logger=_SilentLogger())
+                    self.assertTrue(repeated.already_exists)
+                    self.assertEqual(set(folder.iterdir()), {result.path, legacy_preview})
+
+    def test_twitter_animation_works_without_ffmpeg_or_an_extra_menu(self):
+        from universal_downloader.cli import main
+        folder = self.root / "twitter-menu"
+        with self._twitter_animation() as url, patch("universal_downloader.downloader.find_ffmpeg", return_value=None), patch("universal_downloader.cli.sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=[url, ""]) as user_input, contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(main(["--output", str(folder)]), 0)
+        self.assertEqual(user_input.call_count, 2)
+        self.assertIn("Available: Animation", output.getvalue())
+        self.assertNotIn("Download [1]", output.getvalue())
+        self.assertEqual(errors.getvalue(), "")
+        files = list(folder.iterdir())
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].suffix, ".mp4")
+        self.assertEqual(files[0].read_bytes(), (self.root / "silent.mp4").read_bytes())
 
     def test_preflight_detects_actual_content_including_silent_video(self):
         for endpoint, kinds in (

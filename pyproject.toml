@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "universal-downloader"
-version = "0.3.0"
+version = "0.3.1"
 description = "Download videos, audio, images, and thumbnails from a URL in your terminal."
 readme = "README.md"
 requires-python = ">=3.10"
