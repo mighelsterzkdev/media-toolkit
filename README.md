@@ -10,6 +10,10 @@ Video, audio, images, and thumbnails from a URL.
 
 Paste the URL (Enter to exit): https://example.com/video
 
+Checking the URL...
+Title: My video
+Available: Video, Audio, Image / thumbnail
+
 1. Video
 2. Audio
 3. Image / thumbnail
@@ -28,9 +32,6 @@ Image format
 9. Original image / thumbnail
 Format [1]: 3
 
-Checking the URL...
-Title: My video
-
 Done! File saved to:
 .../downloads/My video [identifier] [image].webp
 ```
@@ -38,6 +39,9 @@ Done! File saved to:
 ## Features
 
 - Download one video, audio track, image, or thumbnail per URL.
+- Check the URL before asking for output options. Unavailable links and unsupported pages fail before the menus.
+- Only offer detected content: audio extraction requires an audio track, and image options require a readable image or thumbnail. A single content type goes straight to its format menu.
+- Reuse inspected metadata, session cookies, and verified image bytes when downloading, without running the website extractor again.
 - Choose among 27 output options, including original video, original audio, and original images.
 - Save a video's best reported thumbnail without downloading the video. If a thumbnail fails, try the next available one.
 - Download direct image URLs and images exposed through Open Graph, Twitter image tags, or a video poster.
@@ -67,7 +71,7 @@ Image conversion uses the actual image encoder rather than renaming a file. PNG/
 
 1. Install [Python 3.10 or later](https://www.python.org/downloads/) and select **Add Python to PATH**.
 2. Open **`install.cmd`** and wait for setup to finish.
-3. Open **`start.cmd`**, paste a URL, and choose **Video**, **Audio**, or **Image / thumbnail**.
+3. Open **`start.cmd`**, paste a URL, wait for the content check, and choose from the available download options.
 
 Existing installations should run `install.cmd` again after updating the project to install the new Pillow dependency. `update.cmd` updates both yt-dlp and Pillow. Dependencies are already installed when setup reports success.
 
@@ -130,6 +134,8 @@ On Windows, run these commands from the project directory:
 ```
 
 Replace the example URLs with real URLs. Quote URLs, especially when they contain `&`. Format names are case-insensitive; `jpeg`, `tif`, `vorbis`, and `thumbnail` are accepted aliases for `jpg`, `tiff`, `ogg`, and `image`. `--quality` is a video source selection limit, not an upscaler. `--source-format` uses the selector syntax of [yt-dlp](https://github.com/yt-dlp/yt-dlp#format-selection) and cannot be combined with `--quality`.
+
+Without `--format`, a direct command keeps the original video, audio, or image according to the detected content. The interactive menu only lists resolution limits up to the detected video height; if that height is unavailable, it uses the best available quality. Animated images go straight to their original format. Direct media with unknown stream types is checked with a time-limited ffprobe request before offering audio or video options. Explicit image commands skip that audio/video probe and only fetch the image. This content check cannot guarantee that a website will stay accessible throughout a later download.
 
 Existing completed files are kept. Format, audio bitrate, resolution, and custom source selector tags distinguish media outputs. Image outputs use an `[image]` tag so they can coexist with the video. To produce another image quality setting for the same URL and format, choose another output folder.
 

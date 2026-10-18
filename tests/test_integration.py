@@ -16,7 +16,8 @@ from unittest.mock import patch
 from PIL import Image
 
 from universal_downloader.dependencies import find_ffmpeg
-from universal_downloader.downloader import DownloadError, DownloadRequest, download, inspect_url
+from universal_downloader.downloader import DownloadError, DownloadRequest, download, inspect_media, inspect_url
+from yt_dlp import YoutubeDL
 from universal_downloader.formats import AUDIO_FORMATS, IMAGE_FORMATS, VIDEO_FORMATS
 
 
@@ -25,6 +26,20 @@ class _SilentHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         self.requests.append(urlsplit(self.path).path)
+        if self.path == "/cookie-page.html":
+            body = b'<html><head><title>Session video</title></head><body><video src="/protected.mp4"></video></body></html>'
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", "media_session=example; Path=/")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/protected.mp4":
+            if "media_session=example" not in self.headers.get("Cookie", ""):
+                self.send_error(403)
+                return
+            self.path = "/sample.mp4"
         if self.path == "/large.png":
             self.send_response(200)
             self.send_header("Content-Type", "image/png")
@@ -79,6 +94,7 @@ class IntegrationTests(unittest.TestCase):
         first_frame = Image.new("RGB", (24, 24), "red")
         first_frame.save(cls.root / "animated.gif", save_all=True, append_images=[Image.new("RGB", (24, 24), "blue")], duration=100, loop=0)
         (cls.root / "broken.png").write_bytes(b"not an image")
+        (cls.root / "empty.html").write_text("<html><body>No media here.</body></html>", encoding="utf-8")
         subprocess.run([
             str(cls.ffmpeg), "-hide_banner", "-loglevel", "error",
             "-f", "lavfi", "-i", "testsrc=size=64x48:rate=10",
@@ -89,6 +105,10 @@ class IntegrationTests(unittest.TestCase):
         subprocess.run([
             str(cls.ffmpeg), "-hide_banner", "-loglevel", "error", "-i", str(cls.fixture),
             "-c", "copy", "-an", str(cls.root / "silent.mp4"),
+        ], check=True, capture_output=True, timeout=30)
+        subprocess.run([
+            str(cls.ffmpeg), "-hide_banner", "-loglevel", "error", "-i", str(cls.fixture),
+            "-c:a", "copy", "-vn", str(cls.root / "song.m4a"),
         ], check=True, capture_output=True, timeout=30)
         subprocess.run([
             str(cls.ffmpeg), "-hide_banner", "-loglevel", "error", "-i", str(cls.fixture),
@@ -193,6 +213,94 @@ class IntegrationTests(unittest.TestCase):
         with Image.open(files[0]) as image:
             self.assertEqual(image.format, "AVIF")
         self.assertIn("Done! File saved to:", output.getvalue())
+
+    def test_preflight_detects_real_content_including_silent_video(self):
+        for endpoint, kinds in (
+            ("page.html", ("video", "audio", "image")),
+            ("sample.mp4", ("video", "audio")),
+            ("silent.mp4", ("video",)),
+            ("song.m4a", ("audio",)),
+            ("thumbnail.png", ("image",)),
+            ("image-without-extension", ("image",)),
+            ("image-page.html", ("image",)),
+        ):
+            with self.subTest(endpoint=endpoint):
+                inspected = inspect_media(self.url.replace("sample.mp4", endpoint), logger=_SilentLogger())
+                self.assertEqual(inspected.kinds, kinds)
+                if "video" in kinds:
+                    self.assertEqual(inspected.heights, (48,))
+                if "image" in kinds:
+                    self.assertTrue(inspected.image_data)
+
+    def test_preflight_image_is_reused_without_refetching_or_video_download(self):
+        for endpoint in ("thumbnail.png", "image-without-extension", "image-page.html", "page.html"):
+            with self.subTest(endpoint=endpoint):
+                _SilentHandler.requests.clear()
+                url = self.url.replace("sample.mp4", endpoint)
+                inspected = inspect_media(url, media_format="webp", logger=_SilentLogger())
+                requests = list(_SilentHandler.requests)
+                result = download(DownloadRequest(url, "webp", output_dir=self.root / f"prepared-{endpoint}"), inspected=inspected, logger=_SilentLogger())
+                self.assertEqual(_SilentHandler.requests, requests)
+                self.assertNotIn("/sample.mp4", requests)
+                if endpoint != "image-without-extension":
+                    self.assertEqual(requests.count("/thumbnail.png"), 1)
+                with Image.open(result.path) as image:
+                    self.assertEqual(image.format, "WEBP")
+
+    def test_preflight_metadata_is_reused_with_new_download_options(self):
+        url = self.url.replace("sample.mp4", "page.html")
+        calls = []
+        original = YoutubeDL.extract_info
+
+        def tracked(downloader, *args, **kwargs):
+            calls.append(args[0])
+            return original(downloader, *args, **kwargs)
+
+        with patch.object(YoutubeDL, "extract_info", new=tracked):
+            inspected = inspect_media(url, logger=_SilentLogger())
+            inspected_calls = list(calls)
+            audio = download(DownloadRequest(url, "mp3", output_dir=self.root / "prepared-audio"), inspected=inspected, logger=_SilentLogger())
+            source_id = inspected.information["formats"][0]["format_id"]
+            video = download(DownloadRequest(url, "mp4", output_dir=self.root / "prepared-video", source_format=source_id), inspected=inspected, logger=_SilentLogger())
+            self.assertEqual(calls, inspected_calls)
+        self.assertEqual([stream["codec_type"] for stream in self._probe(audio.path)["streams"]], ["audio"])
+        self.assertEqual({stream["codec_type"] for stream in self._probe(video.path)["streams"]}, {"audio", "video"})
+        self.assertFalse(inspected.information.get("filepath"))
+
+    def test_invalid_page_fails_before_real_menu_asks_any_options(self):
+        from universal_downloader.cli import main
+        folder = self.root / "invalid-menu"
+        with patch("universal_downloader.cli.sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=[self.url.replace("sample.mp4", "empty.html")]) as user_input, contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(main(["--output", str(folder)]), 1)
+        self.assertEqual(user_input.call_count, 1)
+        self.assertIn("No thumbnail or image", errors.getvalue())
+        self.assertFalse(folder.exists())
+
+    def test_silent_audio_request_is_rejected_before_download_and_output_creation(self):
+        url = self.url.replace("sample.mp4", "silent.mp4")
+        inspected = inspect_media(url, logger=_SilentLogger())
+        folder = self.root / "silent-preflight"
+        _SilentHandler.requests.clear()
+        with self.assertRaisesRegex(DownloadError, "No audio track"):
+            download(DownloadRequest(url, "mp3", output_dir=folder), inspected=inspected, logger=_SilentLogger())
+        self.assertFalse(folder.exists())
+        self.assertEqual(_SilentHandler.requests, [])
+
+    def test_preflight_animated_image_and_corrupt_image(self):
+        inspected = inspect_media(self.url.replace("sample.mp4", "animated.gif"), logger=_SilentLogger())
+        self.assertTrue(inspected.animated)
+        with self.assertRaisesRegex(DownloadError, "Animated"):
+            inspected.validate_format("png")
+        with self.assertRaisesRegex(DownloadError, "readable image"):
+            inspect_media(self.url.replace("sample.mp4", "broken.png"), logger=_SilentLogger())
+
+    def test_inspection_session_cookies_are_preserved_for_probe_and_download(self):
+        url = self.url.replace("sample.mp4", "cookie-page.html")
+        inspected = inspect_media(url, logger=_SilentLogger())
+        self.assertEqual(inspected.kinds, ("video", "audio"))
+        self.assertTrue(inspected.cookies)
+        result = download(DownloadRequest(url, output_dir=self.root / "session-video"), inspected=inspected, logger=_SilentLogger())
+        self.assertEqual(result.path.read_bytes(), self.fixture.read_bytes())
 
     def test_source_format_id_can_be_downloaded(self):
         info = inspect_url(self.url, logger=_SilentLogger())

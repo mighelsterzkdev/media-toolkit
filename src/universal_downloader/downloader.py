@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -19,7 +20,8 @@ from .formats import (
     ALL_FORMATS, AUDIO_BITRATES, AUDIO_FORMATS, IMAGE_FORMATS, LOSSY_AUDIO_FORMATS,
     VIDEO_FORMATS, VIDEO_QUALITIES, normalize_format, output_extension,
 )
-from .images import looks_like_image, page_or_image, save_image
+from .images import check_image, fetch_image, looks_like_image, page_or_image, save_image
+from .inspection import MediaInspection, inspect_streams
 from .media import ConvertMedia, NativeAudio, converted_path
 
 
@@ -88,23 +90,66 @@ def _check_information(information, *, image=False) -> None:
         raise DownloadError("Wait for the live stream or premiere to finish, then try again.")
 
 
+def _read_information(downloader, url: str) -> tuple[dict, bytes | None]:
+    if looks_like_image(url):
+        information, data = page_or_image(downloader, url)
+    else:
+        try:
+            information, data = downloader.extract_info(url, download=False), None
+        except YtDlpError:
+            information, data = page_or_image(downloader, url)
+    _check_information(information, image=True)
+    if not (information.get("thumbnails") or information.get("thumbnail") or information.get("image_url")) and (
+        information.get("ext") in (*IMAGE_FORMATS, "jpeg", "tif")
+        or not (information.get("formats") or information.get("url"))
+    ):
+        information, data = page_or_image(downloader, url)
+    return information, data
+
+
 def inspect_url(url: str, *, logger=None) -> dict:
     """Read available source formats and thumbnails without saving media."""
     url = validate_url(url)
     options = {**_common_options(logger), "skip_download": True, "ignore_no_formats_error": True}
     try:
         with YoutubeDL(options) as downloader:
-            if looks_like_image(url):
-                information, _ = page_or_image(downloader, url)
-            else:
-                try:
-                    information = downloader.extract_info(url, download=False)
-                except YtDlpError:
-                    information, _ = page_or_image(downloader, url)
-            _check_information(information, image=True)
-            if not (information.get("thumbnails") or information.get("thumbnail") or information.get("image_url")) and information.get("ext") in (*IMAGE_FORMATS, "jpeg", "tif"):
-                information, _ = page_or_image(downloader, url)
+            information, _ = _read_information(downloader, url)
             return information
+    except (YtDlpError, RequestError, OSError) as error:
+        raise DownloadError(f"Could not inspect the URL: {error}") from error
+
+
+def inspect_media(url: str, *, media_format: str | None = None, logger=None) -> MediaInspection:
+    """Validate content before menus, retaining metadata and verified image bytes."""
+    url = validate_url(url)
+    options = {**_common_options(logger), "skip_download": True, "ignore_no_formats_error": True}
+    try:
+        with YoutubeDL(options) as downloader:
+            information, data = _read_information(downloader, url)
+            live = information.get("is_live") or information.get("live_status") == "is_upcoming"
+            video, audio, heights = False, False, ()
+            if not live and media_format not in IMAGE_FORMATS:
+                video, audio, heights = inspect_streams(information, find_ffmpeg(), downloader.cookiejar)
+            image_error = None
+            animated = False
+            if media_format is None or media_format in IMAGE_FORMATS:
+                try:
+                    if data is None and media_format in IMAGE_FORMATS and not (information.get("image_url") or information.get("thumbnails") or information.get("thumbnail")):
+                        information, data = page_or_image(downloader, url)
+                    data = data if data is not None else fetch_image(downloader, information)
+                    _, animated = check_image(data)
+                except DownloadError as error:
+                    image_error = str(error)
+                    data = None
+            kinds = tuple(kind for kind, available in (("video", video), ("audio", audio), ("image", data is not None)) if available)
+            if not kinds:
+                if live and media_format not in IMAGE_FORMATS:
+                    raise DownloadError("Wait for the live stream or premiere to finish, then try again.")
+                raise DownloadError(image_error or "No downloadable video, audio, or image could be verified at this URL.")
+            result = MediaInspection(url, information, kinds, heights, data, animated, image_error, tuple(deepcopy(cookie) for cookie in downloader.cookiejar))
+            if media_format:
+                result.validate_format(media_format)
+            return result
     except (YtDlpError, RequestError, OSError) as error:
         raise DownloadError(f"Could not inspect the URL: {error}") from error
 
@@ -125,6 +170,7 @@ def download(
     progress_hook: Callable[[dict], None] | None = None,
     on_info: Callable[[dict], None] | None = None,
     logger: object | None = None,
+    inspected: MediaInspection | None = None,
 ) -> DownloadResult:
     url = validate_url(request.url)
     media_format = normalize_format(request.media_format)
@@ -151,6 +197,10 @@ def download(
             raise DownloadError("The source format selector cannot be empty or contain control characters.")
 
     image = media_format in IMAGE_FORMATS
+    if inspected:
+        if inspected.url != url:
+            raise DownloadError("The inspected URL does not match the download URL. Check the new URL first.")
+        inspected.validate_format(media_format)
     ffmpeg = find_ffmpeg() if not image else None
     if not image and ffmpeg is None:
         raise DownloadError(
@@ -201,13 +251,18 @@ def download(
     final_paths: list[Path] = []
     try:
         with YoutubeDL(options) as downloader:
+            if inspected:
+                for cookie in inspected.cookies:
+                    downloader.cookiejar.set_cookie(deepcopy(cookie))
             if conversion:
                 downloader.add_post_processor(ConvertMedia(downloader, media_format, request.audio_bitrate))
             elif media_format == "audio":
                 downloader.add_post_processor(NativeAudio(downloader))
             downloader.add_post_processor(_FinalFile(final_paths), when="after_move")
-            direct_data = None
-            if image and looks_like_image(url):
+            direct_data = inspected.image_data if inspected else None
+            if inspected:
+                information = deepcopy(inspected.information)
+            elif image and looks_like_image(url):
                 information, direct_data = page_or_image(downloader, url, progress_hook)
             else:
                 try:
@@ -217,7 +272,7 @@ def download(
                         raise
                     information, direct_data = page_or_image(downloader, url, progress_hook)
             _check_information(information, image=image)
-            if image and direct_data is None and not (information.get("thumbnails") or information.get("thumbnail")):
+            if image and not inspected and direct_data is None and not (information.get("thumbnails") or information.get("thumbnail")):
                 information, direct_data = page_or_image(downloader, url, progress_hook)
             if on_info:
                 on_info(information)

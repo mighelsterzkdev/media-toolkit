@@ -11,7 +11,7 @@ from yt_dlp.version import __version__ as ytdlp_version
 
 from . import __version__
 from .dependencies import find_ffmpeg, find_js_runtime
-from .downloader import DownloadError, DownloadRequest, download, inspect_url, validate_url
+from .downloader import DownloadError, DownloadRequest, download, inspect_media, inspect_url, validate_url
 from .formats import (
     ALL_FORMATS, AUDIO_BITRATES, AUDIO_FORMATS, IMAGE_FORMATS, LOSSY_AUDIO_FORMATS,
     VIDEO_FORMATS, VIDEO_QUALITIES, normalize_format,
@@ -80,8 +80,9 @@ def _format_menu(formats: dict[str, str], name: str, default: str) -> str:
     return _choose(menu + f"\nFormat [{default_choice}]: ", choices, default_choice)
 
 
-def _show_formats(information: dict) -> None:
-    _show_info(information)
+def _show_formats(information: dict, *, show_title=True) -> None:
+    if show_title:
+        _show_info(information)
     formats = information.get("formats") or []
     if formats:
         print("\nAvailable source formats (reported by the website):")
@@ -125,6 +126,25 @@ def _validate_options(parser, media_format, args) -> None:
             parser.error("--source-format cannot be combined with --quality")
 
 
+def _choose_type(kinds: tuple[str, ...]) -> str:
+    if len(kinds) == 1:
+        return kinds[0]
+    labels = {"video": "Video", "audio": "Audio", "image": "Image / thumbnail", "list": "Available source formats"}
+    choices = {str(index): kind for index, kind in enumerate((*kinds, "list"), 1)}
+    prompt = "\n" + "\n".join(f"{index}. {labels[kind]}" for index, kind in choices.items())
+    return _choose(prompt + "\nType [1]: ", choices, "1")
+
+
+def _choose_quality(heights: tuple[int, ...]) -> str:
+    values = ["best", *(value for value in VIDEO_QUALITIES[1:] if heights and min(heights) <= int(value) <= max(heights))]
+    if len(values) == 1:
+        return "best"
+    choices = {str(index): value for index, value in enumerate(values, 1)}
+    labels = {"best": "Best available", "2160": "Up to 4K (2160p)"}
+    prompt = "\n" + "\n".join(f"{index}. {labels.get(value, f'Up to {value}p')}" for index, value in choices.items())
+    return _choose(prompt + "\nQuality [1]: ", choices, "1")
+
+
 def _doctor() -> int:
     print(f"Universal Downloader {__version__} | yt-dlp {ytdlp_version}")
     ffmpeg = find_ffmpeg()
@@ -160,13 +180,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.doctor:
             return _doctor()
-        if args.format:
-            _validate_options(parser, args.format, args)
-        media_format = args.format or "video"
+        implied_format = args.format or ("mp3" if args.audio_bitrate else "jpg" if args.image_quality else "video" if args.quality or args.source_format else None)
+        if implied_format:
+            _validate_options(parser, implied_format, args)
         quality = args.quality or "best"
         audio_bitrate = args.audio_bitrate or "192"
-        show_formats = args.list_formats
-        if args.url is None:
+        interactive = args.url is None
+        if interactive:
             if not sys.stdin.isatty():
                 parser.error("provide a URL or run without arguments in an interactive terminal")
             print("\nUNIVERSAL DOWNLOADER\nVideo, audio, images, and thumbnails from a URL.\n")
@@ -174,43 +194,49 @@ def main(argv: list[str] | None = None) -> int:
             if not raw_url:
                 return 0
             url = validate_url(raw_url)
-            if not args.format and not show_formats:
-                kind = _choose(
-                    "\n1. Video\n2. Audio\n3. Image / thumbnail\n4. Available source formats\nType [1]: ",
-                    {"1": "video", "2": "audio", "3": "image", "4": "list"}, "1",
-                )
+        else:
+            url = validate_url(args.url)
+        print("\nChecking the URL...")
+        logger = _Logger(args.verbose)
+        if args.list_formats:
+            _show_formats(inspect_url(url, logger=logger))
+            return 0
+        inspected = inspect_media(url, media_format=implied_format, logger=logger)
+        _show_info(inspected.information)
+        labels = {"video": "Video", "audio": "Audio", "image": "Image / thumbnail"}
+        print("Available: " + ", ".join(labels[kind] for kind in inspected.kinds))
+        media_format = implied_format or inspected.kinds[0]
+        if interactive:
+            if not implied_format:
+                kind = _choose_type(inspected.kinds)
                 if kind == "list":
-                    show_formats = True
-                elif kind == "video":
+                    _show_formats(inspected.information, show_title=False)
+                    return 0
+                if kind == "video":
                     media_format = _format_menu(VIDEO_FORMATS, "Video format", "video")
                 elif kind == "audio":
                     media_format = _format_menu(AUDIO_FORMATS, "Audio format", "mp3")
+                elif inspected.animated:
+                    print("Animated image detected. Keeping the original format and animation.")
+                    media_format = "image"
                 else:
                     available = available_image_formats()
                     choices = {key: label for key, label in IMAGE_FORMATS.items() if key in available or key == "image"}
                     media_format = _format_menu(choices, "Image format", "jpg" if "jpg" in choices else "image")
-            if media_format in VIDEO_FORMATS and args.quality is None and not args.source_format and not show_formats:
-                quality = _choose(
-                    "\n1. Best available\n2. Up to 4K (2160p)\n3. Up to 1440p\n4. Up to 1080p\n5. Up to 720p\n6. Up to 480p\n7. Up to 360p\nQuality [1]: ",
-                    {str(index): value for index, value in enumerate(VIDEO_QUALITIES, 1)}, "1",
-                )
-            if media_format in LOSSY_AUDIO_FORMATS and args.audio_bitrate is None and not show_formats:
+            if media_format in VIDEO_FORMATS and args.quality is None and not args.source_format:
+                quality = _choose_quality(inspected.heights)
+            if media_format in LOSSY_AUDIO_FORMATS and args.audio_bitrate is None:
                 audio_bitrate = _choose(
                     "\n1. 64 kbps\n2. 96 kbps\n3. 128 kbps\n4. 160 kbps\n5. 192 kbps\n6. 256 kbps\n7. 320 kbps\nAudio bitrate [5]: ",
                     {str(index): value for index, value in enumerate(AUDIO_BITRATES, 1)}, "5",
                 )
-        else:
-            url = validate_url(args.url)
-        if show_formats:
-            _show_formats(inspect_url(url, logger=_Logger(args.verbose)))
-            return 0
         _validate_options(parser, media_format, args)
-        print("\nChecking the URL...")
+        inspected.validate_format(media_format)
         if media_format not in ("video", "audio") and media_format not in IMAGE_FORMATS:
             print("The selected format will be encoded locally. Conversion can take a while for large files.")
         result = download(
             DownloadRequest(url, media_format, quality, args.output, audio_bitrate, args.image_quality or 90, args.source_format),
-            progress_hook=_Progress(), on_info=_show_info, logger=_Logger(args.verbose),
+            progress_hook=_Progress(), logger=logger, inspected=inspected,
         )
         print(f"\nDone! File saved to:\n{result.path}")
         return 0

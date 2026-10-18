@@ -94,7 +94,7 @@ def _read_response(response, limit: int, progress_hook=None) -> bytes:
     return output.getvalue()
 
 
-def _check_image(data: bytes) -> tuple[str, bool]:
+def check_image(data: bytes) -> tuple[str, bool]:
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
@@ -132,13 +132,13 @@ def page_or_image(downloader, url: str, progress_hook=None) -> tuple[dict, bytes
         info["title"] = parser.title or title
         info["thumbnails"] = [{"url": candidate} for value in parser.urls if (candidate := _image_url(url, value))]
         return info, None
-    _check_image(data)
+    check_image(data)
     info["image_url"] = url
     return info, data
 
 
 def _encode(data: bytes, media_format: str, quality: int) -> tuple[bytes, str]:
-    extension, animated = _check_image(data)
+    extension, animated = check_image(data)
     if media_format == "image":
         return data, extension
     if animated:
@@ -209,7 +209,14 @@ def save_image(downloader, information, media_format, quality, direct_data=None,
 
     if direct_data is not None:
         return save(direct_data)
+    return save(fetch_image(downloader, information, progress_hook))
+
+
+def fetch_image(downloader, information: dict, progress_hook=None) -> bytes:
+    """Fetch and verify the best reachable thumbnail, without saving a file."""
     thumbnails = list(information.get("thumbnails") or [])
+    if information.get("image_url"):
+        thumbnails.append({"url": information["image_url"]})
     if information.get("thumbnail"):
         thumbnails.append({"url": information["thumbnail"]})
     thumbnails.sort(key=lambda item: (
@@ -235,7 +242,8 @@ def save_image(downloader, information, media_format, quality, direct_data=None,
         try:
             with _open_response(downloader, Request(url, headers=headers)) as response:
                 data = _read_response(response, MAX_IMAGE_BYTES, progress_hook)
-            return save(data)
+            check_image(data)
+            return data
         except (DownloadError, RequestError, OSError, ValueError) as error:
             last_error = error
     if last_error:
