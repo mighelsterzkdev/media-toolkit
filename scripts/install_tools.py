@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import shutil
 import sys
 import tempfile
 from pathlib import Path
 from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
 from zipfile import ZipFile
 
 from universal_downloader.dependencies import find_ffmpeg, find_js_runtime
@@ -18,7 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _fetch(url: str):
-    return urlopen(Request(url, headers={"User-Agent": "universal-downloader-setup"}), timeout=60)
+    headers = {"User-Agent": "universal-downloader-setup"}
+    parts = urlsplit(url)
+    if parts.scheme == "https" and parts.hostname == "api.github.com" and (token := os.environ.get("GITHUB_TOKEN")):
+        headers["Authorization"] = f"Bearer {token}"
+    return urlopen(Request(url, headers=headers), timeout=60)
 
 
 def install_asset(repository: str, match, destination: Path, binaries: set[str]) -> None:

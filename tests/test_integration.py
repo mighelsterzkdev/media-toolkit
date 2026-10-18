@@ -120,6 +120,10 @@ class IntegrationTests(unittest.TestCase):
         ], check=True, capture_output=True, timeout=30)
         subprocess.run([
             str(cls.ffmpeg), "-hide_banner", "-loglevel", "error", "-i", str(cls.fixture),
+            "-c:a", "libmp3lame", "-vn", str(cls.root / "song.mp3"),
+        ], check=True, capture_output=True, timeout=30)
+        subprocess.run([
+            str(cls.ffmpeg), "-hide_banner", "-loglevel", "error", "-i", str(cls.fixture),
             "-c:v", "copy", "-c:a", "mp2", str(cls.root / "uncommon.mkv"),
         ], check=True, capture_output=True, timeout=30)
         subprocess.run([
@@ -149,10 +153,9 @@ class IntegrationTests(unittest.TestCase):
         return [packet["data_hash"] for packet in json.loads(result.stdout)["packets"]]
 
     @contextlib.contextmanager
-    def _twitter_animation(self):
+    def _twitter_animation(self, media_url="https://video.twimg.com/tweet_video/fixture.mp4"):
         """Use the real Twitter extractor with a local API and media fixture."""
         base = self.url.removesuffix("sample.mp4")
-        media_url = "https://video.twimg.com/tweet_video/fixture.mp4"
         status = {
             "full_text": "animated clip", "user": {"name": "GIF Test", "screen_name": "gif_test"},
             "extended_entities": {"media": [{
@@ -173,6 +176,119 @@ class IntegrationTests(unittest.TestCase):
 
         with patch("yt_dlp.extractor.twitter.TwitterIE._extract_status", return_value=status), patch.object(YoutubeDL, "urlopen", new=route):
             yield "https://x.com/gif_test/status/1234567890123456789"
+
+    def test_twitter_api_type_survives_a_change_to_the_asset_url(self):
+        with self._twitter_animation("https://video.twimg.com/new_media_route/fixture.mp4") as url:
+            inspected = inspect_media(url, media_format="image", logger=_SilentLogger())
+            self.assertEqual(inspected.information["media_type"], "animated_gif")
+            self.assertTrue(inspected.animation_video)
+            result = download(DownloadRequest(url, "image", self.root / "twitter-declared-type"), inspected=inspected, logger=_SilentLogger())
+        self.assertEqual(result.path.read_bytes(), (self.root / "silent.mp4").read_bytes())
+
+    def test_mp3_conversion_produces_audio_only_and_reuses_completed_output(self):
+        inspected = inspect_media(self.url, logger=_SilentLogger())
+        request = DownloadRequest(self.url, "audio", self.root / "converted-mp3", "mp3")
+        result = download(request, inspected=inspected, logger=_SilentLogger())
+        streams = self._probe(result.path)["streams"]
+        self.assertEqual([stream["codec_type"] for stream in streams], ["audio"])
+        self.assertEqual(streams[0]["codec_name"], "mp3")
+        self.assertEqual(int(streams[0]["bit_rate"]), 192000)
+        self.assertEqual([path.resolve() for path in result.path.parent.iterdir()], [result.path])
+        modified = result.path.stat().st_mtime_ns
+        _SilentHandler.requests.clear()
+        repeated = download(request, inspected=inspected, logger=_SilentLogger())
+        self.assertTrue(repeated.already_exists)
+        self.assertEqual(result.path.stat().st_mtime_ns, modified)
+        self.assertEqual(_SilentHandler.requests, [])
+
+    def test_mp4_conversion_uses_compatible_video_and_audio_codecs(self):
+        result = download(DownloadRequest(self.url, "video", self.root / "converted-mp4", "mp4"), logger=_SilentLogger())
+        streams = self._probe(result.path)["streams"]
+        self.assertEqual([stream["codec_name"] for stream in streams], ["h264", "aac"])
+        self.assertEqual([path.resolve() for path in result.path.parent.iterdir()], [result.path])
+
+    def test_converting_an_existing_mp3_keeps_its_original_bytes(self):
+        url = self.url.replace("sample.mp4", "song.mp3")
+        result = download(DownloadRequest(url, "audio", self.root / "convert-native-mp3", "mp3"), logger=_SilentLogger())
+        self.assertEqual(result.path.read_bytes(), (self.root / "song.mp3").read_bytes())
+        self.assertEqual([path.resolve() for path in result.path.parent.iterdir()], [result.path])
+
+    def test_image_conversions_encode_real_formats_and_flatten_jpeg_transparency(self):
+        for endpoint, target, expected in (("thumbnail.png", "jpg", "JPEG"), ("small.jpg", "png", "PNG"), ("thumbnail.png", "png", "PNG")):
+            with self.subTest(endpoint=endpoint, target=target):
+                url = self.url.replace("sample.mp4", endpoint)
+                with patch("universal_downloader.downloader.find_ffmpeg", return_value=None), patch("universal_downloader.conversions.find_ffmpeg", return_value=None):
+                    result = download(DownloadRequest(url, "image", self.root / f"convert-{endpoint}-{target}", target), logger=_SilentLogger())
+                with Image.open(result.path) as image:
+                    image.load()
+                    self.assertEqual(image.format, expected)
+                    if endpoint == "thumbnail.png" and target == "jpg":
+                        self.assertTrue(all(abs(actual - value) <= 4 for actual, value in zip(image.getpixel((0, 0)), (165, 190, 226))))
+                if endpoint == "thumbnail.png" and target == "png":
+                    self.assertEqual(result.path.read_bytes(), (self.root / endpoint).read_bytes())
+                self.assertEqual([path.resolve() for path in result.path.parent.iterdir()], [result.path])
+
+    def test_native_gif_can_be_kept_or_converted_to_mp4_without_losing_animation(self):
+        url = self.url.replace("sample.mp4", "animated.gif")
+        for target in ("gif", "mp4"):
+            with self.subTest(target=target):
+                result = download(DownloadRequest(url, "image", self.root / f"convert-native-gif-{target}", target), logger=_SilentLogger())
+                if target == "gif":
+                    self.assertEqual(result.path.read_bytes(), (self.root / "animated.gif").read_bytes())
+                else:
+                    self.assertEqual([stream["codec_name"] for stream in self._probe(result.path)["streams"]], ["h264"])
+                    self.assertGreater(len(self._packet_hashes(result.path, "v:0")), 1)
+                self.assertEqual([path.resolve() for path in result.path.parent.iterdir()], [result.path])
+
+    def test_twitter_animation_converts_to_a_real_animated_gif(self):
+        with self._twitter_animation() as url:
+            inspected = inspect_media(url, logger=_SilentLogger())
+            result = download(DownloadRequest(url, "image", self.root / "converted-twitter-gif", "gif"), inspected=inspected, logger=_SilentLogger())
+            alias = download(DownloadRequest(url, "video", self.root / "converted-twitter-gif", "gif"), inspected=inspected, logger=_SilentLogger())
+            self.assertEqual(alias.path, result.path)
+            self.assertTrue(alias.already_exists)
+        with Image.open(result.path) as image:
+            self.assertEqual(image.format, "GIF")
+            self.assertGreater(image.n_frames, 1)
+            self.assertEqual(image.size, (64, 48))
+        self.assertEqual([path.resolve() for path in result.path.parent.iterdir()], [result.path])
+
+    def test_incompatible_or_long_conversions_are_rejected_before_downloading(self):
+        for endpoint, kind, target in (("animated.gif", "image", "png"), ("thumbnail.png", "image", "mp3"), ("sample.mp4", "video", "gif")):
+            with self.subTest(endpoint=endpoint, target=target):
+                folder = self.root / f"reject-{endpoint}-{target}"
+                with self.assertRaises(DownloadError):
+                    download(DownloadRequest(self.url.replace("sample.mp4", endpoint), kind, folder, target), logger=_SilentLogger())
+                self.assertFalse(folder.exists())
+        with self._twitter_animation() as url:
+            inspected = inspect_media(url, logger=_SilentLogger())
+            inspected.information["duration"] = 120
+            folder = self.root / "long-gif"
+            _SilentHandler.requests.clear()
+            with self.assertRaisesRegex(DownloadError, "30 seconds"):
+                download(DownloadRequest(url, "image", folder, "gif"), inspected=inspected, logger=_SilentLogger())
+            self.assertFalse(folder.exists())
+            self.assertEqual(_SilentHandler.requests, [])
+
+    def test_failed_or_canceled_conversion_cleans_only_its_temporary_files(self):
+        inspected = inspect_media(self.url, logger=_SilentLogger())
+        for failure in (DownloadError("Conversion failed"), KeyboardInterrupt()):
+            folder = self.root / f"failed-convert-{type(failure).__name__}"
+            with patch("universal_downloader.downloader.convert_file", side_effect=failure), self.assertRaises(type(failure)):
+                download(DownloadRequest(self.url, "audio", folder, "mp3"), inspected=inspected, logger=_SilentLogger())
+            self.assertEqual(list(folder.iterdir()), [])
+
+    def test_real_convert_command_keeps_the_original_menu_separate(self):
+        from universal_downloader.cli import main
+        folder = self.root / "convert-command"
+        answers = ["convert", self.url, "2", "2", ""]
+        with patch("universal_downloader.cli.sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=answers), contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(main(["--output", str(folder)]), 0)
+        files = list(folder.iterdir())
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].suffix, ".mp3")
+        self.assertIn("Original (recommended)", output.getvalue())
+        self.assertEqual(errors.getvalue(), "")
 
     def test_twitter_gif_keeps_animation_instead_of_downloading_its_jpeg_preview(self):
         with self._twitter_animation() as url:
@@ -294,8 +410,8 @@ class IntegrationTests(unittest.TestCase):
         with patch.object(YoutubeDL, "extract_info", new=tracked):
             inspected = inspect_media(url, logger=_SilentLogger())
             inspected_calls = list(calls)
-            for kind in ("video", "audio", "image"):
-                result = download(DownloadRequest(url, kind, self.root / f"reused-{kind}"), inspected=inspected, logger=_SilentLogger())
+            for kind, target in (("video", None), ("audio", None), ("image", None), ("audio", "mp3"), ("image", "jpg")):
+                result = download(DownloadRequest(url, kind, self.root / f"reused-{kind}-{target}", target), inspected=inspected, logger=_SilentLogger())
                 self.assertTrue(result.path.is_file())
             self.assertEqual(calls, inspected_calls)
         self.assertFalse(inspected.information.get("filepath"))

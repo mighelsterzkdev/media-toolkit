@@ -6,7 +6,7 @@ Paste a link, choose **Video**, **Audio**, or **Image / thumbnail**, and downloa
 
 ```text
 UNIVERSAL DOWNLOADER
-Original media. Best available quality.
+Original downloads (recommended). Type convert for other formats.
 
 Paste the URL (Enter to exit): https://example.com/video
 
@@ -14,11 +14,11 @@ Checking the URL...
 
 Title: My video
 Duration: 2:30
-Available: Video, Audio, Image / thumbnail
+Available: Video, Audio, Thumbnail
 
 1. Video
 2. Audio
-3. Image / thumbnail
+3. Thumbnail
 0. Another URL
 Download [1]: 3
 
@@ -35,6 +35,7 @@ Paste the URL (Enter to exit):
 - **Video:** keep the source streams and use the best available quality. Separate video and audio streams are merged without re-encoding.
 - **Audio:** download the original audio file when available. If the audio is inside a video, copy its audio stream into a suitable container without re-encoding. An AAC track may become an M4A file; other codecs keep their own compatible container.
 - **Image / thumbnail:** save the exact original bytes of the best reachable image, keeping its format, transparency, metadata, and animation.
+- The menu names the detected asset: **Image**, **Thumbnail**, or **Animation**. A video's static cover is separate from its primary media.
 - **Twitter/X GIFs:** recognize the animated media asset and show **Animation**. If the source delivers the animation as MP4, keep that animated MP4, without downloading its static JPEG preview or converting it to GIF. The image download command handles these animations automatically.
 - A link containing only one kind of media downloads immediately, without a choice menu.
 - Completed files are kept and reported as **Already downloaded**.
@@ -42,7 +43,33 @@ Paste the URL (Enter to exit):
 - Reuse inspected metadata, cookies created by the source website, and image bytes when downloading.
 - Resume partial downloads when supported. Show progress, transfer speed, and time remaining.
 
-There are no conversion, resolution, or bitrate menus. "Original" means the media made available by the website, which may already be compressed by that website.
+Original downloads do not ask for encoding settings. "Original" means the media made available by the website, which may already be compressed by that website.
+
+## Optional conversion
+
+Paste links normally to keep the original media. For a different format, type **convert** at the URL prompt, paste a link, and choose what to save. This separate menu keeps **Original (recommended)** as the default and only offers compatible conversions:
+
+| Detected content | Optional formats |
+| --- | --- |
+| Video | MP4 (H.264 + AAC for compatibility) |
+| Audio | MP3 |
+| Image or thumbnail | PNG, JPG |
+| Animation | GIF, MP4 |
+
+Conversions can change quality; they do not restore lost source detail. Animated content is not offered static-image conversions. Re-encoding an animation as GIF supports up to **30 seconds**, at 15 fps and up to 720 pixels on the longest side. Original downloads and unchanged native GIF files are not restricted by that conversion limit. Images and MP3/GIF files already in the requested format are kept without re-encoding when supported.
+
+Conversion uses the same inspected source and downloads it once into a private work folder. Only the completed result appears in the output folder. Temporary work is cleaned after success, failure, or cancellation, and completed results are reused.
+
+Direct commands are also available:
+
+```powershell
+.\start.cmd "https://example.com/video" --convert mp3
+.\start.cmd "https://example.com/video" --convert mp4
+.\start.cmd "https://example.com/animation" --convert gif
+.\start.cmd "https://example.com/photo.webp" --convert png
+```
+
+Use `--type` to choose a specific source asset when needed, such as `--type image --convert jpg` for a thumbnail. `jpeg` is accepted as an alias for `jpg`. No conversion happens without the command or menu selection.
 
 ## Quick start on Windows
 
@@ -80,7 +107,7 @@ Run **update.cmd** when a supported website stops working. It updates yt-dlp and
 .\start.cmd "https://example.com/video" --verbose
 ```
 
-Quote URLs, especially when they contain `&`. Type names are case-insensitive, and `thumbnail` is an alias for `image`. Existing `--format video|audio|image` commands still work as aliases for `--type`; conversion formats and manual encoding options have been removed.
+Quote URLs, especially when they contain `&`. Type names are case-insensitive, and `thumbnail` is an alias for `image`. Existing `--format video|audio|image` commands still work as aliases for `--type`. Converted formats use the separate `--convert` option; manual bitrate and resolution settings are not part of the normal flow.
 
 To use a specific Python installation:
 
@@ -116,7 +143,9 @@ Thumbnails must be exposed by the source page. A direct video file often has no 
 .\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
 ```
 
-Tests use temporary local HTTP fixtures. They verify original image/video bytes, audio packet hashes before and after extraction, unchanged audio-only files, stream merging, completed-file preservation, thumbnail fallback, metadata and cookie reuse, and repeated downloads in the terminal. CI installs FFmpeg on Windows and Linux.
+Tests use temporary local HTTP fixtures. They verify original image/video bytes, audio packet hashes before and after extraction, converted codecs and animation frames, unchanged audio-only files, stream merging, temporary-file cleanup, completed-file preservation, thumbnail fallback, metadata and cookie reuse, and repeated downloads in the terminal. CI installs FFmpeg on Windows and Linux.
+
+Source adapters preserve provider metadata before inspection; the Twitter adapter retains the API's declared media type. `inspection.py` describes content and asset roles, `downloader.py` handles original downloads, and `conversions.py` handles optional local transformations. Converters do not extract URLs or choose thumbnails.
 
 The launcher and test commands use `-B` to avoid source bytecode caches. Keep **.venv/** and **.tools/** to run without reinstalling. **tests/** and **.github/workflows/** contain automated checks. Downloaded media, caches, and generated package metadata are excluded from Git.
 

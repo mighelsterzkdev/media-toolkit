@@ -4,7 +4,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from universal_downloader.downloader import DownloadError, DownloadRequest, download, inspect_media, validate_url
-from universal_downloader.inspection import MediaInspection, is_video_animation
+from universal_downloader.inspection import MediaInspection
+from universal_downloader.sources import is_video_animation
 
 
 class InputTests(unittest.TestCase):
@@ -44,12 +45,17 @@ class InputTests(unittest.TestCase):
         for request in (
             DownloadRequest("not a url"), DownloadRequest("https://example.com/video", "zip"),
             DownloadRequest("https://example.com/video", "mp3"), DownloadRequest("https://example.com/video", "png"),
+            DownloadRequest("https://example.com/video", convert_to="zip"),
         ):
             with self.subTest(request=request), self.assertRaises(DownloadError):
                 download(request)
         with self.assertRaises(DownloadError):
             inspect_media("https://example.com/video", media_format="png")
         downloader.assert_not_called()
+
+    def test_declared_media_type_takes_precedence_over_cdn_path(self):
+        self.assertTrue(is_video_animation({"media_type": "animated_gif", "formats": [{"url": "https://video.twimg.com/new_path/clip.mp4"}]}))
+        self.assertFalse(is_video_animation({"media_type": "video", "formats": [{"url": "https://video.twimg.com/tweet_video/clip.mp4"}]}))
 
     @patch("universal_downloader.downloader.find_ffmpeg", return_value=None)
     @patch("universal_downloader.downloader.YoutubeDL")

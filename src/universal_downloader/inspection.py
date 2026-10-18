@@ -6,7 +6,6 @@ import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from .errors import DownloadError
 from .formats import MEDIA_TYPES
@@ -24,6 +23,17 @@ class MediaInspection:
     cookies: tuple = field(default=(), repr=False)
     animation_video: bool = False
 
+    @property
+    def image_role(self) -> str:
+        if self.animated:
+            return "animation"
+        has_media = any(kind in self.kinds for kind in ("video", "audio")) or bool(self.information.get("formats"))
+        return "thumbnail" if has_media and not self.information.get("image_url") else "image"
+
+    @property
+    def labels(self) -> dict[str, str]:
+        return {**MEDIA_TYPES, "image": self.image_role.capitalize()}
+
     def validate_format(self, media_format: str) -> None:
         if media_format not in MEDIA_TYPES:
             raise DownloadError("Choose video, audio, or image. Files keep their original format.")
@@ -37,26 +47,6 @@ class MediaInspection:
                 "image": self.image_error or "No readable image or thumbnail was found at this URL.",
             }[kind]
             raise DownloadError(message)
-
-
-def is_video_animation(information: dict) -> bool:
-    """Recognize an animation delivered as video, without guessing from silence."""
-    sources = information.get("formats") or [information]
-    sources = [source for source in sources if source.get("url") and not source.get("has_drm")]
-    if not sources:
-        return False
-    if information.get("media_type") in ("animated_gif", "gif"):
-        return True
-    for source in sources:
-        try:
-            url = urlsplit(source["url"])
-        except ValueError:
-            continue
-        # Twitter's GIF asset is distinct from its static tweet_video_thumb
-        # preview and from ordinary (including silent) ext_tw_video clips.
-        if url.hostname == "video.twimg.com" and url.path.startswith("/tweet_video/") and url.path.lower().endswith(".mp4"):
-            return True
-    return False
 
 
 def _probe_streams(source: dict, information: dict, ffmpeg: Path, cookiejar=None) -> dict | None:

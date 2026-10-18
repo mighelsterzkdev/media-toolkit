@@ -44,7 +44,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(self.download.call_args.args[0].media_format, "image" if kind == "thumbnail" else kind.lower())
                 self.assertEqual(self.download.call_args.args[0].output_dir, Path("my-downloads"))
 
-    def test_conversion_and_manual_encoding_options_are_removed(self):
+    def test_formats_are_only_available_through_explicit_conversion(self):
         for options in (
             ["--type", "png"], ["--format", "mp3"], ["--quality", "720"],
             ["--audio-bitrate", "192"], ["--image-quality", "80"],
@@ -54,6 +54,49 @@ class CliTests(unittest.TestCase):
                 main([self.inspected.url, *options])
             self.assertEqual(result.exception.code, 2)
         self.inspect_media.assert_not_called()
+        self.download.assert_not_called()
+
+    def test_explicit_conversion_selects_compatible_content(self):
+        for target, kind in (("MP3", "audio"), ("mp4", "video"), ("png", "image"), ("jpg", "image"), ("JPEG", "image")):
+            with self.subTest(target=target):
+                self.assertEqual(main([self.inspected.url, "--convert", target]), 0)
+                request = self.download.call_args.args[0]
+                self.assertEqual(request.media_format, kind)
+                self.assertEqual(request.convert_to, "jpg" if target == "JPEG" else target.lower())
+
+    def test_convert_command_opens_separate_format_menu(self):
+        status, _ = self.menu(["convert", self.inspected.url, "2", "2", ""])
+        self.assertEqual(status, 0)
+        self.assertEqual(self.download.call_args.args[0].convert_to, "mp3")
+        self.assertIn("Original (recommended)", self.output.getvalue())
+
+    def test_original_is_still_default_in_conversion_menu(self):
+        status, _ = self.menu(["convert", self.inspected.url, "2", "", ""])
+        self.assertEqual(status, 0)
+        self.assertIsNone(self.download.call_args.args[0].convert_to)
+
+    def test_back_from_conversion_returns_to_original_mode(self):
+        status, _ = self.menu(["convert", self.inspected.url, "3", "0", self.inspected.url, "1", ""])
+        self.assertEqual(status, 0)
+        self.download.assert_called_once()
+        self.assertIsNone(self.download.call_args.args[0].convert_to)
+
+    def test_empty_conversion_url_returns_to_main_prompt(self):
+        status, _ = self.menu(["convert", "", ""])
+        self.assertEqual(status, 0)
+        self.inspect_media.assert_not_called()
+
+    def test_animations_do_not_offer_static_image_conversions(self):
+        self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Animation"}, ("image",), image_data=b"gif", animated=True)
+        status, _ = self.menu(["convert", self.inspected.url, "2", ""])
+        self.assertEqual(status, 0)
+        self.assertEqual(self.download.call_args.args[0].convert_to, "gif")
+        self.assertNotIn("PNG", self.output.getvalue())
+        self.assertNotIn("JPG", self.output.getvalue())
+
+    def test_bad_conversion_does_not_download_or_ask_for_more_options(self):
+        self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Picture"}, ("image",), image_data=b"image")
+        self.assertEqual(main([self.inspected.url, "--convert", "mp3"]), 1)
         self.download.assert_not_called()
 
     def test_each_type_needs_only_one_choice_without_format_or_quality_menus(self):

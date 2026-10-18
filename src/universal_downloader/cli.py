@@ -12,8 +12,9 @@ from yt_dlp.version import __version__ as ytdlp_version
 
 from . import __version__
 from .dependencies import find_ffmpeg, find_js_runtime
+from .conversions import conversion_kind, conversion_targets
 from .downloader import DownloadError, DownloadRequest, download, inspect_media, validate_url
-from .formats import MEDIA_TYPES, normalize_type
+from .formats import CONVERSIONS, MEDIA_TYPES, normalize_conversion, normalize_type
 
 
 class _Logger:
@@ -38,6 +39,9 @@ class _Progress:
         self.last_update = 0.0
 
     def __call__(self, status: dict) -> None:
+        if status["status"] == "converting":
+            print(f"\rConverting to {status['format'].upper()}...".ljust(90))
+            return
         if status["status"] == "finished":
             print("\rFinalizing...".ljust(90), end="", flush=True)
             return
@@ -77,20 +81,45 @@ def _choose_type(kinds: tuple[str, ...], labels: dict[str, str]) -> str | None:
         print("Invalid option. Try again.")
 
 
-def _save(url: str, args, logger: _Logger, *, interactive: bool) -> None:
+def _choose_conversion(inspected, kind: str) -> str | None:
+    choices = {"1": "original", **{str(index): target for index, target in enumerate(conversion_targets(inspected, kind), 2)}}
+    print("\n1. Original (recommended)")
+    for index, target in choices.items():
+        if target != "original":
+            print(f"{index}. {CONVERSIONS[target]}")
+    print("0. Another URL")
+    while True:
+        answer = input("Save as [1]: ").strip() or "1"
+        if answer == "0":
+            return None
+        if answer in choices:
+            return choices[answer]
+        print("Invalid option. Try again.")
+
+
+def _save(url: str, args, logger: _Logger, *, interactive: bool, conversion_mode=False) -> None:
     print("\nChecking the URL...")
-    inspected = inspect_media(url, media_format=args.media_type, logger=logger)
+    target = args.convert
+    inspection_type = args.media_type or {"mp3": "audio", "png": "image", "jpg": "image"}.get(target)
+    inspected = inspect_media(url, media_format=inspection_type, logger=logger)
     _show_info(inspected.information)
-    labels = {**MEDIA_TYPES, "image": "Animation" if inspected.animated else MEDIA_TYPES["image"]}
+    labels = inspected.labels
     print("Available: " + ", ".join(labels[kind] for kind in inspected.kinds))
     kind = args.media_type
-    if kind is None:
+    if target:
+        kind = conversion_kind(inspected, target, kind)
+    elif kind is None:
         kind = _choose_type(inspected.kinds, labels) if interactive else inspected.kinds[0]
     if kind is None:
         return
     inspected.validate_format(kind)
+    if conversion_mode and target is None:
+        selection = _choose_conversion(inspected, kind)
+        if selection is None:
+            return
+        target = None if selection == "original" else selection
     result = download(
-        DownloadRequest(url, kind, args.output),
+        DownloadRequest(url, kind, args.output, target),
         progress_hook=_Progress(), logger=logger, inspected=inspected,
     )
     status = "Already downloaded" if result.already_exists else "Saved"
@@ -118,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("url", nargs="?", help="media URL; opens the interactive menu when omitted")
     parser.add_argument("--type", dest="media_type", type=normalize_type, choices=MEDIA_TYPES, help="what to download (default: detect automatically)")
     parser.add_argument("--format", dest="media_type", type=normalize_type, choices=MEDIA_TYPES, help=argparse.SUPPRESS)
+    parser.add_argument("--convert", type=normalize_conversion, choices=CONVERSIONS, help="convert only when requested (default: original)")
     parser.add_argument("--output", type=Path, default=Path("downloads"), help="output directory (default: downloads)")
     parser.add_argument("--doctor", action="store_true", help="check installed dependencies")
     parser.add_argument("--verbose", action="store_true", help="show technical details for troubleshooting")
@@ -132,13 +162,18 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if not sys.stdin.isatty():
             parser.error("provide a URL or run without arguments in an interactive terminal")
-        print("\nUNIVERSAL DOWNLOADER\nOriginal media. Best available quality.\n")
+        print("\nUNIVERSAL DOWNLOADER\nOriginal downloads (recommended). Type convert for other formats.\n")
         while True:
             try:
                 raw_url = input("\nPaste the URL (Enter to exit): ").strip()
                 if not raw_url:
                     return 0
-                _save(validate_url(raw_url), args, logger, interactive=True)
+                conversion_mode = raw_url.lower() == "convert"
+                if conversion_mode:
+                    raw_url = input("URL to convert (Enter to go back): ").strip()
+                    if not raw_url:
+                        continue
+                _save(validate_url(raw_url), args, logger, interactive=True, conversion_mode=conversion_mode)
             except DownloadError as error:
                 print(f"\nError: {error}", file=sys.stderr)
             except EOFError:

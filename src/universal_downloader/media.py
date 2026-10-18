@@ -1,11 +1,12 @@
 """Extract audio with stream copying; never fall back to re-encoding."""
 
 from pathlib import Path
-import shutil
 import tempfile
 
 from yt_dlp.postprocessor.ffmpeg import FFmpegPostProcessor
 from yt_dlp.utils import PostProcessingError
+
+from .storage import publish_file
 
 
 AUDIO_EXTENSIONS = ("m4a", "mp3", "opus", "ogg", "flac", "wav", "aac", "aiff", "mka", "webm", "mp4", "wma", "ac3", "eac3", "dts", "amr")
@@ -13,22 +14,6 @@ AUDIO_EXTENSIONS = ("m4a", "mp3", "opus", "ogg", "flac", "wav", "aac", "aiff", "
 
 def original_path(path: Path, extension: str) -> Path:
     return path.with_name(f"{path.stem.removesuffix('.source')}.{extension}")
-
-
-def _publish_file(source: Path, destination: Path) -> bool:
-    try:
-        output = destination.open("xb")
-    except FileExistsError:
-        if not destination.is_file():
-            raise PostProcessingError(f"The output path is not a file: {destination}")
-        return False
-    try:
-        with output, source.open("rb") as input_file:
-            shutil.copyfileobj(input_file, output)
-    except BaseException:
-        destination.unlink(missing_ok=True)
-        raise
-    return True
 
 
 class NativeAudio(FFmpegPostProcessor):
@@ -61,9 +46,9 @@ class NativeAudio(FFmpegPostProcessor):
                 self.run_ffmpeg(str(source), str(extracted), [
                     "-map", "0:a:0", "-vn", "-sn", "-dn", "-c:a", "copy",
                 ])
-                _publish_file(extracted, destination)
+                publish_file(extracted, destination)
         elif not has_video:
-            _publish_file(source, destination)
+            publish_file(source, destination)
         information["filepath"] = str(destination)
         information["ext"] = extension
         return [str(source)], information

@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+import tempfile
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -14,11 +15,13 @@ from yt_dlp.postprocessor import PostProcessor
 from yt_dlp.utils import DownloadError as YtDlpError
 
 from .dependencies import find_ffmpeg, find_js_runtime
+from .conversions import convert_file, validate_conversion
 from .errors import DownloadError
-from .formats import MEDIA_TYPES, normalize_type
+from .formats import CONVERSIONS, MEDIA_TYPES, normalize_conversion, normalize_type
 from .images import IMAGE_EXTENSIONS, check_image, fetch_image, looks_like_image, page_or_image, save_image
-from .inspection import MediaInspection, inspect_streams, is_video_animation
+from .inspection import MediaInspection, inspect_streams
 from .media import AUDIO_EXTENSIONS, NativeAudio, original_path
+from .sources import configure_sources, is_video_animation
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,7 @@ class DownloadRequest:
     url: str
     media_format: str = "video"
     output_dir: Path = Path("downloads")
+    convert_to: str | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +111,7 @@ def inspect_media(url: str, *, media_format: str | None = None, logger=None) -> 
     options = {**_common_options(logger), "skip_download": True, "ignore_no_formats_error": True}
     try:
         with YoutubeDL(options) as downloader:
+            configure_sources(downloader)
             information, data = _read_information(downloader, url)
             live = information.get("is_live") or information.get("live_status") == "is_upcoming"
             animation_video = not live and is_video_animation(information)
@@ -170,6 +175,9 @@ def download(
     kind = normalize_type(request.media_format)
     if kind not in MEDIA_TYPES:
         raise DownloadError("Choose video, audio, or image. Files keep their original format.")
+    target = normalize_conversion(request.convert_to) if request.convert_to else None
+    if target is not None and target not in CONVERSIONS:
+        raise DownloadError("Unsupported conversion. Choose mp3, mp4, gif, png, or jpg.")
     if inspected:
         if inspected.url != url:
             raise DownloadError("The inspected URL does not match the download URL. Check the new URL first.")
@@ -179,11 +187,16 @@ def download(
     inspected = inspected or inspect_media(url, media_format=kind, logger=logger)
     inspected.validate_format(kind)
     _check_information(inspected.information, image=kind == "image")
+    if target:
+        validate_conversion(inspected, kind, target)
     output_dir = Path(request.output_dir).expanduser().resolve()
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as error:
         raise DownloadError(f"Could not create the output directory: {error}") from error
+
+    if target:
+        return _download_converted(url, kind, target, output_dir, inspected, progress_hook, logger)
 
     image_file = kind == "image" and not inspected.animation_video
     qualifier = f" [{kind}]" if kind != "video" else ""
@@ -231,3 +244,32 @@ def download(
         raise DownloadError("The download finished without producing a file. Try updating yt-dlp.")
     path, exists = results[-1]
     return DownloadResult(information.get("title", path.stem), path, exists)
+
+
+def _download_converted(url, kind, target, output_dir, inspected, progress_hook, logger) -> DownloadResult:
+    """Download once into a private work folder, then convert and publish."""
+    role = inspected.image_role if kind == "image" or inspected.animation_video else kind
+    template = f"%(title).100B [%(id).40B] [{role}-{target}].%(ext)s"
+    naming_options = {
+        "quiet": True, "windowsfilenames": True,
+        "paths": {"home": str(output_dir)}, "outtmpl": {"default": template},
+    }
+    with YoutubeDL(naming_options) as naming:
+        destination = Path(naming.prepare_filename({**inspected.information, "ext": target})).resolve()
+    title = inspected.information.get("title") or destination.stem
+    if destination.exists():
+        if not destination.is_file():
+            raise DownloadError(f"The output path is not a file: {destination}")
+        return DownloadResult(title, destination, True)
+    try:
+        with tempfile.TemporaryDirectory(prefix=".unidown-", dir=output_dir) as temporary:
+            original = download(
+                DownloadRequest(url, kind, Path(temporary)),
+                inspected=inspected, progress_hook=progress_hook, logger=logger,
+            )
+            if progress_hook:
+                progress_hook({"status": "converting", "format": target})
+            created = convert_file(original.path, target, destination, logger=logger)
+    except OSError as error:
+        raise DownloadError(f"Could not prepare the conversion: {error}") from error
+    return DownloadResult(title, destination, not created)
