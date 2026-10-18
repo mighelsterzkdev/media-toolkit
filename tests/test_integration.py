@@ -201,7 +201,7 @@ class IntegrationTests(unittest.TestCase):
                     self.assertEqual(legacy_preview.read_bytes(), preview_bytes)
                     repeated = download(request, inspected=inspected, logger=_SilentLogger())
                     self.assertTrue(repeated.already_exists)
-                    self.assertEqual(set(folder.iterdir()), {result.path, legacy_preview})
+                    self.assertEqual({path.resolve() for path in folder.iterdir()}, {result.path.resolve(), legacy_preview.resolve()})
 
     def test_twitter_animation_works_without_ffmpeg_or_an_extra_menu(self):
         from universal_downloader.cli import main
