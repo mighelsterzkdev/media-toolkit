@@ -15,7 +15,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from yt_dlp.utils import sanitize_filename
 
 from .errors import DownloadError
-from .storage import publish_file
+from .storage import PreparedFile, prepare_file
 
 
 def _canonical_url(value: str) -> str:
@@ -155,8 +155,10 @@ class DownloadHistory:
                 except sqlite3.Error:
                     pass
 
-    def _cached(self, connection, identity: DownloadIdentity) -> Path | None:
-        row = connection.execute("SELECT filename, size, sha256 FROM downloads WHERE root = ? AND identity = ?", (self.root, identity.key)).fetchone()
+    def _record(self, connection, identity: DownloadIdentity):
+        return connection.execute("SELECT filename, size, sha256 FROM downloads WHERE root = ? AND identity = ?", (self.root, identity.key)).fetchone()
+
+    def _verified(self, row) -> Path | None:
         if row:
             filename, size, checksum = row
             if not isinstance(filename, str) or not isinstance(size, int) or size <= 0 or not isinstance(checksum, str) or not re.fullmatch(r"[a-f0-9]{64}", checksum):
@@ -166,6 +168,9 @@ class DownloadHistory:
             if path.parent == self.output_dir and path.name == filename and _fingerprint(path) == (size, checksum):
                 return path
         return None
+
+    def _cached(self, connection, identity: DownloadIdentity) -> Path | None:
+        return self._verified(self._record(connection, identity))
 
     def cached(self, identity: DownloadIdentity) -> Path | None:
         if self._disabled:
@@ -177,11 +182,11 @@ class DownloadHistory:
             self._unavailable(error.__cause__ or error)
             return None
 
-    def _publish_unique(self, staged: Path, filename: str) -> Path:
+    def _publish_unique(self, prepared: PreparedFile, filename: str) -> Path:
         initial = self.output_dir / filename
         destination = initial
         number = 1
-        while destination.exists() or destination.is_symlink() or not publish_file(staged, destination):
+        while destination.exists() or destination.is_symlink() or not prepared.publish(destination):
             number += 1
             destination = initial.with_name(f"{initial.stem} ({number}){initial.suffix}")
         return destination
@@ -195,23 +200,35 @@ class DownloadHistory:
         if not re.fullmatch(r"[a-z0-9]{1,12}", extension):
             raise DownloadError("The downloaded file has no recognized file extension.")
         filename = identity.filename(title, extension)
-        if not self._disabled:
-            published = None
-            try:
-                with self._connection() as connection:
-                    connection.execute("BEGIN IMMEDIATE")
-                    if existing := self._cached(connection, identity):
-                        return existing, True
-                    published = self._publish_unique(staged, filename)
-                    connection.execute("INSERT OR REPLACE INTO downloads (root, identity, filename, size, sha256) VALUES (?, ?, ?, ?, ?)", (self.root, identity.key, published.name, *fingerprint))
-                return published, False
-            except _HistoryUnavailable as error:
-                self._unavailable(error.__cause__ or error)
-                if published is not None:
-                    # A commit failure must not publish the same complete
-                    # download twice or delete the file already delivered.
+        # Copying, flushing and verifying large files can take longer than
+        # SQLite's busy timeout. Only the final rename and index update need
+        # to hold the writer lock.
+        with prepare_file(staged, self.output_dir) as prepared:
+            if not self._disabled:
+                published = None
+                try:
+                    with self._connection() as connection:
+                        while True:
+                            record = self._record(connection, identity)
+                            if existing := self._verified(record):
+                                return existing, True
+                            connection.execute("BEGIN IMMEDIATE")
+                            # Another publisher may have completed while this
+                            # file was being verified. Recheck outside the lock.
+                            if self._record(connection, identity) != record:
+                                connection.rollback()
+                                continue
+                            published = self._publish_unique(prepared, filename)
+                            connection.execute("INSERT OR REPLACE INTO downloads (root, identity, filename, size, sha256) VALUES (?, ?, ?, ?, ?)", (self.root, identity.key, published.name, *fingerprint))
+                            break
                     return published, False
-        return self._publish_unique(staged, filename), False
+                except _HistoryUnavailable as error:
+                    self._unavailable(error.__cause__ or error)
+                    if published is not None:
+                        # A commit failure must not publish the same complete
+                        # download twice or delete the file already delivered.
+                        return published, False
+            return self._publish_unique(prepared, filename), False
 
 
 class _HistoryUnavailable(Exception):

@@ -4,14 +4,17 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import tempfile
+from threading import Event
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 from PIL import Image
 
+from universal_downloader import identity as identity_module
 from universal_downloader.downloader import DownloadRequest, download
 from universal_downloader.identity import DownloadHistory, media_identity
 from universal_downloader.inspection import MediaInspection
@@ -217,6 +220,72 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(sorted(existing for _, existing in results), [False, True])
         self.assertEqual(list(self.output.iterdir()), [results[0][0]])
 
+    def test_slow_copy_does_not_disable_concurrent_identity_reuse(self):
+        inspected = self.inspected()
+        self.output.mkdir()
+        slow_source, fast_source = self.root / "slow.png", self.root / "fast.png"
+        for staged in (slow_source, fast_source):
+            staged.write_bytes(inspected.image_data)
+        identity = media_identity(DownloadRequest(inspected.url, "image", self.output), inspected, "image", None)
+        copying, release_copy = Event(), Event()
+        copy_file = shutil.copyfileobj
+
+        def delayed_copy(source, destination):
+            if Path(source.name) == slow_source:
+                copying.set()
+                if not release_copy.wait(timeout=10):
+                    raise TimeoutError("The test did not release its slow source copy.")
+            return copy_file(source, destination)
+
+        loggers = [Mock(), Mock()]
+        with patch("universal_downloader.storage.shutil.copyfileobj", side_effect=delayed_copy), ThreadPoolExecutor(max_workers=2) as pool:
+            slow = pool.submit(DownloadHistory(self.output, logger=loggers[0]).publish, slow_source, identity, "Same title")
+            try:
+                self.assertTrue(copying.wait(timeout=5))
+                fast = pool.submit(DownloadHistory(self.output, logger=loggers[1]).publish, fast_source, identity, "Same title")
+                fast_result = fast.result(timeout=5)
+            finally:
+                release_copy.set()
+            slow_result = slow.result(timeout=5)
+        self.assertEqual(slow_result, (fast_result[0], True))
+        self.assertFalse(fast_result[1])
+        self.assertEqual(fast_result[0].read_bytes(), inspected.image_data)
+        self.assertEqual(list(self.output.iterdir()), [fast_result[0]])
+        for logger in loggers:
+            logger.warning.assert_not_called()
+
+    def test_slow_cache_verification_does_not_disable_other_publications(self):
+        inspected = self.inspected()
+        original = self.save(inspected)
+        staged = self.root / "complete.png"
+        staged.write_bytes(inspected.image_data)
+        identity = media_identity(DownloadRequest(inspected.url, "image", self.output), inspected, "image", None)
+        checking, release_check = Event(), Event()
+        fingerprint = identity_module._fingerprint
+
+        def delayed_fingerprint(path):
+            if path == original.path and not checking.is_set():
+                checking.set()
+                if not release_check.wait(timeout=10):
+                    raise TimeoutError("The test did not release its cache verification.")
+            return fingerprint(path)
+
+        loggers = [Mock(), Mock()]
+        with patch("universal_downloader.identity._fingerprint", side_effect=delayed_fingerprint), ThreadPoolExecutor(max_workers=2) as pool:
+            slow = pool.submit(DownloadHistory(self.output, logger=loggers[0]).publish, staged, identity, "Same title")
+            try:
+                self.assertTrue(checking.wait(timeout=5))
+                fast = pool.submit(DownloadHistory(self.output, logger=loggers[1]).publish, staged, identity, "Same title")
+                fast_result = fast.result(timeout=5)
+            finally:
+                release_check.set()
+            slow_result = slow.result(timeout=5)
+        self.assertEqual(slow_result, (original.path, True))
+        self.assertEqual(fast_result, (original.path, True))
+        self.assertEqual(list(self.output.iterdir()), [original.path])
+        for logger in loggers:
+            logger.warning.assert_not_called()
+
     def test_corrupt_history_never_blocks_download_or_reuses_an_unverified_file(self):
         database = self.root / "state" / "downloads.sqlite3"
         database.parent.mkdir()
@@ -311,7 +380,7 @@ class IdentityTests(unittest.TestCase):
         staged = self.root / "complete.png"
         staged.write_bytes(inspected.image_data)
         logger = Mock()
-        with patch("universal_downloader.identity.publish_file", side_effect=PermissionError("Output folder denied")), self.assertRaises(PermissionError):
+        with patch("universal_downloader.identity.prepare_file", side_effect=PermissionError("Output folder denied")), self.assertRaises(PermissionError):
             DownloadHistory(self.output, logger=logger).publish(staged, identity, inspected.information["title"])
         logger.warning.assert_not_called()
         self.assertEqual(list(self.output.iterdir()), [])

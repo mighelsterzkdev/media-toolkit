@@ -1,5 +1,7 @@
 """Publish complete files without exposing partial data or replacing downloads."""
 
+from contextlib import contextmanager
+from dataclasses import dataclass
 from io import BytesIO
 import os
 from pathlib import Path
@@ -33,16 +35,41 @@ def _commit(staged: Path, destination: Path) -> bool:
     return True
 
 
-def _publish(input_file: BinaryIO, destination: Path) -> bool:
-    if _exists(destination):
-        return False
-    with tempfile.TemporaryDirectory(prefix=".unidown-save-", dir=destination.parent) as temporary:
+@dataclass(frozen=True)
+class PreparedFile:
+    """A complete private copy, ready for a short atomic publication."""
+
+    path: Path
+
+    def publish(self, destination: Path) -> bool:
+        if _exists(destination):
+            return False
+        return _commit(self.path, destination)
+
+
+@contextmanager
+def _prepared_file(input_file: BinaryIO, directory: Path):
+    with tempfile.TemporaryDirectory(prefix=".unidown-save-", dir=directory) as temporary:
         staged = Path(temporary) / "complete"
         with staged.open("xb") as output:
             shutil.copyfileobj(input_file, output)
             output.flush()
             os.fsync(output.fileno())
-        return _commit(staged, destination)
+        yield PreparedFile(staged)
+
+
+@contextmanager
+def prepare_file(source: Path, directory: Path):
+    """Copy and flush on the destination filesystem before taking shared locks."""
+    with source.open("rb") as input_file, _prepared_file(input_file, directory) as prepared:
+        yield prepared
+
+
+def _publish(input_file: BinaryIO, destination: Path) -> bool:
+    if _exists(destination):
+        return False
+    with _prepared_file(input_file, destination.parent) as prepared:
+        return prepared.publish(destination)
 
 
 def publish_file(source: Path, destination: Path) -> bool:
