@@ -14,17 +14,16 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python: ['3.10', '3.12', '3.14']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
-      - run: python -B -m pip install -e .
+      - run: python -B -m pip install -c constraints.txt -e .
+      - run: python -B -m universal_downloader.compatibility
       - name: Install FFmpeg for integration tests
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Install portable tools for integration tests
         if: runner.os == 'Windows'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python -B scripts/install_tools.py
       - run: python -B -m unittest discover -s tests -v

@@ -4,6 +4,7 @@ import functools
 import contextlib
 import io
 import json
+import os
 import subprocess
 import tempfile
 import threading
@@ -72,6 +73,9 @@ class IntegrationTests(unittest.TestCase):
         cls.temporary = tempfile.TemporaryDirectory(prefix="unidown-test-")
         cls.addClassCleanup(cls.temporary.cleanup)
         cls.root = Path(cls.temporary.name)
+        history_environment = patch.dict(os.environ, {"UNIDOWN_DATA_DIR": str(cls.root / "state")})
+        history_environment.start()
+        cls.addClassCleanup(history_environment.stop)
         cls.tools = find_ffmpeg()
         suffix = ".exe" if (cls.tools / "ffmpeg.exe").exists() else ""
         cls.ffmpeg = cls.tools / f"ffmpeg{suffix}"

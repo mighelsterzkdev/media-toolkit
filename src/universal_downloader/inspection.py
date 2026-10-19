@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
+
+from PIL import Image, UnidentifiedImageError
 
 from .errors import DownloadError
 from .formats import MEDIA_TYPES
@@ -23,6 +26,7 @@ class MediaInspection:
     cookies: tuple = field(default=(), repr=False)
     animation_video: bool = False
     image_extension: str | None = None
+    alternatives: tuple[MediaInspection, ...] = ()
 
     @property
     def image_role(self) -> str:
@@ -34,6 +38,16 @@ class MediaInspection:
     @property
     def labels(self) -> dict[str, str]:
         return {**MEDIA_TYPES, "image": self.image_role.capitalize()}
+
+    @property
+    def image_dimensions(self) -> tuple[int, int] | None:
+        if not self.image_data:
+            return None
+        try:
+            with Image.open(BytesIO(self.image_data)) as image:
+                return image.size
+        except (UnidentifiedImageError, OSError, ValueError):
+            return None
 
     def original_extension(self, kind: str) -> str | None:
         """Describe a known original container without guessing a merged output."""

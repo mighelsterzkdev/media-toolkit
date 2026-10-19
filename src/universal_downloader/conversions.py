@@ -45,12 +45,16 @@ def conversion_kind(inspected: MediaInspection, target: str, selected: str | Non
     raise DownloadError(f"{target.upper()} conversion is not available for this content. Choose the original download or another compatible format.")
 
 
-def validate_conversion(inspected: MediaInspection, kind: str, target: str) -> None:
+def validate_conversion(inspected: MediaInspection, kind: str, target: str, *, max_height: int | None = None) -> None:
     conversion_kind(inspected, target, kind)
+    if target == "mp4" and max_height is not None and max_height < 2:
+        raise DownloadError("MP4 compatibility conversion requires --max-height of at least 2 pixels.")
     duration = inspected.information.get("duration")
     native_gif = False
     if target == "gif" and inspected.image_data:
-        native_gif = check_image(inspected.image_data)[0] == "gif"
+        dimensions = inspected.image_dimensions
+        resizing = max_height is not None and dimensions is not None and dimensions[1] > max_height
+        native_gif = check_image(inspected.image_data)[0] == "gif" and not resizing
     if target == "gif" and not native_gif and isinstance(duration, (int, float)):
         if not math.isfinite(duration) or not 0 < duration <= MAX_GIF_SECONDS:
             raise DownloadError(f"GIF conversion supports animations with a duration of up to {MAX_GIF_SECONDS} seconds. Keep the original for other animations.")
@@ -58,12 +62,26 @@ def validate_conversion(inspected: MediaInspection, kind: str, target: str) -> N
         raise DownloadError("FFmpeg and ffprobe are required for this conversion. Run install.cmd.")
 
 
-def available_conversions(inspected: MediaInspection, kind: str) -> tuple[str, ...]:
-    """Offer only conversions that pass the same preflight as the downloader."""
+def available_conversions(inspected: MediaInspection, kind: str, *, max_height: int | None = None) -> tuple[str, ...]:
+    """Hide exact native copies and offer only usable, meaningful conversions."""
     available = []
-    for target in conversion_targets(inspected, kind):
+    original = inspected.original_extension(kind)
+    if kind == "image" and not inspected.animation_video and inspected.image_data:
         try:
-            validate_conversion(inspected, kind, target)
+            original = check_image(inspected.image_data)[0]
+        except DownloadError:
+            # The inspection may describe a deferred image fetch. Its known
+            # metadata can still determine the offered options.
+            pass
+    dimensions = inspected.image_dimensions
+    resizing = max_height is not None and dimensions is not None and dimensions[1] > max_height
+    for target in conversion_targets(inspected, kind):
+        # MP4 still means a compatibility conversion: the same container may
+        # contain codecs that are not H.264/AAC. Other native copies are exact.
+        if target != "mp4" and target == original and not resizing:
+            continue
+        try:
+            validate_conversion(inspected, kind, target, max_height=max_height)
         except DownloadError:
             continue
         available.append(target)
@@ -108,16 +126,26 @@ def _convert_image(source: Path, target: str, output: Path) -> None:
         image.close()
 
 
-def convert_file(source: Path, target: str, destination: Path, *, logger=None) -> bool:
+def _fits_height(source: Path, max_height: int | None) -> bool:
+    if max_height is None:
+        return True
+    with Image.open(source) as image:
+        return image.height <= max_height
+
+
+def convert_file(source: Path, target: str, destination: Path, *, logger=None, max_size: int | None = None, max_height: int | None = None) -> bool:
     """Convert an original file and publish only the completed result."""
     if target not in CONVERSIONS:
         raise DownloadError("Unsupported conversion target.")
+    for name, limit in (("--max-size", max_size), ("--max-height", max_height)):
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0):
+            raise DownloadError(f"{name} must be a positive integer.")
     try:
         with tempfile.TemporaryDirectory(prefix=".unidown-convert-", dir=destination.parent) as temporary:
             output = Path(temporary) / f"output.{target}"
             if target in ("png", "jpg"):
                 _convert_image(source, target, output)
-            elif target == "gif" and source.suffix.lower() == ".gif":
+            elif target == "gif" and source.suffix.lower() == ".gif" and _fits_height(source, max_height):
                 if check_image(source.read_bytes())[0] != "gif":
                     raise DownloadError("The source file is not a readable GIF.")
                 shutil.copyfile(source, output)
@@ -139,15 +167,20 @@ def convert_file(source: Path, target: str, destination: Path, *, logger=None) -
                     if target == "mp3":
                         options = ["-map", "0:a:0", "-vn", "-sn", "-dn", "-c:a", "libmp3lame", "-b:a", "192k"]
                     elif target == "mp4":
+                        if max_height is not None and max_height < 2:
+                            raise DownloadError("MP4 compatibility conversion requires --max-height of at least 2 pixels.")
+                        even_height = max_height - max_height % 2 if max_height else None
+                        scale = f"scale=w=-2:h='min(ih,{even_height})'," if even_height else ""
                         options = [
                             "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn",
-                            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-pix_fmt", "yuv420p",
+                            "-vf", scale + "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-pix_fmt", "yuv420p",
                             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
                             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
                         ]
                     else:
+                        height = min(720, max_height) if max_height else 720
                         graph = (
-                            "fps=15,scale=w='min(720,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease,"
+                            f"fps=15,scale=w='min(720,iw)':h='min({height},ih)':force_original_aspect_ratio=decrease,"
                             "split[a][b];[a]palettegen[palette];[b][palette]paletteuse"
                         )
                         options = ["-filter_complex", graph, "-an", "-loop", "0"]
@@ -159,6 +192,8 @@ def convert_file(source: Path, target: str, destination: Path, *, logger=None) -
                         if logger:
                             logger.debug(result.stderr)
                         raise DownloadError(f"Could not convert this media to {target.upper()}. Use --verbose for details.")
+            if max_size is not None and output.stat().st_size > max_size:
+                raise DownloadError("The converted file exceeds --max-size. Increase the limit or keep the original.")
             return publish_file(output, destination)
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         raise DownloadError(f"Could not convert the file to {target.upper()}: {error}") from error

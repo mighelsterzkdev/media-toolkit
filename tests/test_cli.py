@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from universal_downloader.cli import main
+from universal_downloader.cli import _parse_size, main
 from universal_downloader.downloader import DownloadError, DownloadResult
 from universal_downloader.inspection import MediaInspection
 
@@ -103,7 +103,7 @@ class CliTests(unittest.TestCase):
         self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Animation"}, ("image",), image_data=self.gif_data, animated=True, image_extension="gif")
         status, _ = self.menu([self.inspected.url, "2", ""])
         self.assertEqual(status, 0)
-        self.assertEqual(self.download.call_args.args[0].convert_to, "gif")
+        self.assertEqual(self.download.call_args.args[0].convert_to, "mp4")
         self.assertNotIn("PNG", self.output.getvalue())
         self.assertNotIn("JPG", self.output.getvalue())
 
@@ -171,18 +171,182 @@ class CliTests(unittest.TestCase):
                 self.assertIn("2. MP4 video", self.output.getvalue())
                 self.assertEqual(self.download.call_args.args[0].convert_to, "mp4")
 
-    def test_native_gif_remains_available_without_ffmpeg_or_duration_limit(self):
+    def test_native_gif_has_only_original_without_ffmpeg(self):
         self.inspect_media.return_value = MediaInspection(
             self.inspected.url, {"title": "Animation", "duration": 120}, ("image",),
             image_data=self.gif_data, animated=True, image_extension="gif",
         )
         with patch("universal_downloader.conversions.find_ffmpeg", return_value=None):
-            status, _ = self.menu([self.inspected.url, "2", ""])
+            status, _ = self.menu([self.inspected.url, "1", ""])
         self.assertEqual(status, 0)
         self.assertIn("1. Original GIF (recommended)", self.output.getvalue())
-        self.assertIn("2. GIF animation", self.output.getvalue())
+        self.assertNotIn("GIF animation", self.output.getvalue())
         self.assertNotIn("MP4 video", self.output.getvalue())
+        self.assertIsNone(self.download.call_args.args[0].convert_to)
+
+    def test_native_audio_copy_is_not_offered_as_a_conversion(self):
+        self.inspect_media.return_value = MediaInspection(
+            self.inspected.url, {"title": "Sound", "ext": "mp3", "vcodec": "none", "acodec": "mp3"}, ("audio",),
+        )
+        status, _ = self.menu([self.inspected.url, "1", ""])
+        self.assertEqual(status, 0)
+        self.assertIn("1. Original MP3 (recommended)", self.output.getvalue())
+        self.assertNotIn("2. MP3 audio", self.output.getvalue())
+        self.assertIsNone(self.download.call_args.args[0].convert_to)
+
+    def test_native_image_copy_is_hidden_but_other_format_remains(self):
+        self.inspect_media.return_value = MediaInspection(
+            self.inspected.url, {"title": "Image"}, ("image",), image_extension="png",
+        )
+        status, _ = self.menu([self.inspected.url, "2", ""])
+        self.assertEqual(status, 0)
+        self.assertIn("1. Original PNG (recommended)", self.output.getvalue())
+        self.assertNotIn("PNG image", self.output.getvalue())
+        self.assertEqual(self.download.call_args.args[0].convert_to, "jpg")
+
+    def test_explicit_native_copy_flag_remains_supported(self):
+        self.inspect_media.return_value = MediaInspection(
+            self.inspected.url, {"title": "Sound", "ext": "mp3", "vcodec": "none", "acodec": "mp3"}, ("audio",),
+        )
+        self.assertEqual(main([self.inspected.url, "--convert", "mp3"]), 0)
+        self.assertEqual(self.download.call_args.args[0].convert_to, "mp3")
+
+    def test_mp4_choice_explains_compatibility_conversion(self):
+        self.inspect_media.return_value = MediaInspection(
+            self.inspected.url, {"title": "Video", "ext": "mp4", "vcodec": "vp9", "acodec": "opus"}, ("video",),
+        )
+        status, _ = self.menu([self.inspected.url, "2", ""])
+        self.assertEqual(status, 0)
+        self.assertIn("Original MP4 (recommended)", self.output.getvalue())
+        self.assertIn("MP4 video (H.264 / AAC)", self.output.getvalue())
+        self.assertEqual(self.download.call_args.args[0].convert_to, "mp4")
+
+    def test_size_units_are_explicit_and_decimal_or_binary(self):
+        for value, expected in (("100MB", 100_000_000), ("100MiB", 104_857_600), ("1.5 GB", 1_500_000_000), ("2KiB", 2048), ("1B", 1)):
+            with self.subTest(value=value):
+                self.assertEqual(_parse_size(value), expected)
+
+    def test_optional_limits_reach_the_download_request(self):
+        self.assertEqual(main([self.inspected.url, "--max-height", "720", "--max-size", "100MiB"]), 0)
+        request = self.download.call_args.args[0]
+        self.assertEqual(request.max_height, 720)
+        self.assertEqual(request.max_size, 104_857_600)
+
+    def test_invalid_limits_fail_before_network_access(self):
+        for options in (("--max-height", "0"), ("--max-height", "-2"), ("--max-height", "720p"), ("--max-size", "0MB"), ("--max-size", "100"), ("--max-size", "NaNMB"), ("--max-size", "0.5B")):
+            with self.subTest(options=options), self.assertRaises(SystemExit) as result:
+                main([self.inspected.url, *options])
+            self.assertEqual(result.exception.code, 2)
+        self.inspect_media.assert_not_called()
+        self.download.assert_not_called()
+
+    def test_height_limit_does_not_silently_resize_static_images_or_audio(self):
+        for kind in ("audio", "image"):
+            with self.subTest(kind=kind):
+                self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Example"}, (kind,))
+                self.assertEqual(main([self.inspected.url, "--max-height", "720"]), 1)
+                self.download.assert_not_called()
+
+    def test_original_animation_exceeding_height_is_replaced_by_real_resize_choices(self):
+        with io.BytesIO() as encoded:
+            frames = [Image.new("RGB", (100, 100), color) for color in ("red", "blue")]
+            frames[0].save(encoded, "GIF", save_all=True, append_images=frames[1:], duration=100)
+            data = encoded.getvalue()
+        self.inspect_media.return_value = MediaInspection(
+            self.inspected.url, {"title": "Animation", "height": 100, "duration": 0.2}, ("image",),
+            image_data=data, animated=True, image_extension="gif",
+        )
+        status, _ = self.menu([self.inspected.url, "1", ""], ["--max-height", "50"])
+        self.assertEqual(status, 0)
+        self.assertNotIn("Original GIF", self.output.getvalue())
+        self.assertIn("1. GIF animation (recommended)", self.output.getvalue())
         self.assertEqual(self.download.call_args.args[0].convert_to, "gif")
+
+    def test_raw_image_exceeding_source_cap_fails_before_choices(self):
+        self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Image"}, ("image",), image_data=self.gif_data)
+        self.assertEqual(main([self.inspected.url, "--max-size", "1B"]), 1)
+        self.assertIn("source file exceeds --max-size", self.errors.getvalue())
+        self.download.assert_not_called()
+
+    def page_with_assets(self):
+        assets = (
+            MediaInspection("https://example.com/a.gif", {"title": "Actual animation"}, ("image",), image_data=self.gif_data, animated=True, image_extension="gif"),
+            MediaInspection("https://example.com/b.jpg", {"title": "Second picture"}, ("image",), image_extension="jpg"),
+        )
+        self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Page"}, ("image",), alternatives=assets)
+        return assets
+
+    def test_multiple_page_assets_require_selection_before_format_menu(self):
+        assets = self.page_with_assets()
+        status, _ = self.menu([self.inspected.url, "wrong", "2", "1", ""])
+        self.assertEqual(status, 0)
+        self.inspect_media.assert_called_once()
+        request = self.download.call_args.args[0]
+        self.assertEqual(request.url, assets[1].url)
+        self.assertIs(self.download.call_args.kwargs["inspected"], assets[1])
+        self.assertIn("1. Actual animation [Animation GIF, 2×2]", self.output.getvalue())
+        self.assertIn("2. Second picture [Image JPG]", self.output.getvalue())
+        self.assertIsNone(request.convert_to)
+
+    def test_multiple_asset_menu_can_return_without_downloading(self):
+        self.page_with_assets()
+        status, _ = self.menu([self.inspected.url, "0", ""])
+        self.assertEqual(status, 0)
+        self.download.assert_not_called()
+
+    def test_direct_multiple_asset_command_requires_explicit_item(self):
+        self.page_with_assets()
+        self.assertEqual(main([self.inspected.url]), 1)
+        self.assertIn("--item NUMBER", self.errors.getvalue())
+        self.assertIn("Actual animation", self.output.getvalue())
+        self.download.assert_not_called()
+
+    def test_direct_item_selects_and_converts_real_animation(self):
+        assets = self.page_with_assets()
+        self.assertEqual(main([self.inspected.url, "--item", "1", "--convert", "mp4"]), 0)
+        request = self.download.call_args.args[0]
+        self.assertEqual(request.url, assets[0].url)
+        self.assertEqual(request.media_format, "image")
+        self.assertEqual(request.convert_to, "mp4")
+
+    def test_out_of_range_item_cannot_start_download(self):
+        self.page_with_assets()
+        self.assertEqual(main([self.inspected.url, "--item", "3"]), 1)
+        self.assertIn("from 1 to 2", self.errors.getvalue())
+        self.download.assert_not_called()
+
+    def test_single_asset_item_one_is_supported_and_other_values_fail(self):
+        self.assertEqual(main([self.inspected.url, "--item", "2"]), 1)
+        self.download.assert_not_called()
+        self.assertEqual(main([self.inspected.url, "--item", "1"]), 0)
+        self.download.assert_called_once()
+
+    def test_nonpositive_item_fails_before_inspection(self):
+        for item in ("0", "-1", "1.5", "one"):
+            with self.subTest(item=item), self.assertRaises(SystemExit) as error:
+                main([self.inspected.url, "--item", item])
+            self.assertEqual(error.exception.code, 2)
+        self.inspect_media.assert_not_called()
+
+    def test_similar_page_assets_show_dimensions_and_only_needed_filenames(self):
+        assets = (
+            MediaInspection(self.inspected.url, {"title": "Gallery", "image_url": "https://example.com/red.gif"}, ("image",), image_data=self.gif_data, animated=True, image_extension="gif"),
+            MediaInspection(self.inspected.url, {"title": "Gallery", "image_url": "https://example.com/blue.gif"}, ("image",), image_data=self.gif_data, animated=True, image_extension="gif"),
+            MediaInspection("https://example.com/video.mp4", {"title": "Gallery", "width": 480, "height": 270, "ext": "mp4", "vcodec": "h264", "acodec": "aac"}, ("video",)),
+            MediaInspection("https://example.com/other.mp4", {"title": "Other video", "formats": [
+                {"width": 320, "height": 180, "ext": "mp4", "vcodec": "h264", "acodec": "aac"},
+                {"width": 640, "height": 360, "ext": "mp4", "vcodec": "h264", "acodec": "aac"},
+            ]}, ("video",)),
+        )
+        self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Gallery"}, ("image", "video"), alternatives=assets)
+        status, _ = self.menu([self.inspected.url, "0", ""])
+        self.assertEqual(status, 0)
+        self.assertIn("1. Gallery [Animation GIF, 2×2] - red.gif", self.output.getvalue())
+        self.assertIn("2. Gallery [Animation GIF, 2×2] - blue.gif", self.output.getvalue())
+        self.assertIn("3. Gallery [Video MP4, 480×270]", self.output.getvalue())
+        self.assertIn("4. Other video [Video MP4, up to 640×360]", self.output.getvalue())
+        self.assertNotIn(" - video.mp4", self.output.getvalue())
+        self.download.assert_not_called()
 
     def test_missing_encoder_hides_conversion_but_still_requires_original_choice(self):
         self.inspect_media.return_value = MediaInspection(
@@ -311,6 +475,22 @@ class CliTests(unittest.TestCase):
     def test_doctor_reports_missing_tools(self, runtime, ffmpeg):
         self.assertEqual(main(["--doctor"]), 1)
         self.assertIn("install.cmd", self.output.getvalue())
+
+    @patch("universal_downloader.cli.find_ffmpeg", return_value=Path("."))
+    @patch("universal_downloader.cli.find_js_runtime", return_value=("node", Path("node.exe")))
+    @patch("universal_downloader.cli.compatibility_issues", return_value=["yt-dlp version is untested."])
+    def test_doctor_checks_dependency_adapter_compatibility(self, issues, runtime, ffmpeg):
+        self.assertEqual(main(["--doctor"]), 1)
+        self.assertIn("Dependency compatibility", self.output.getvalue())
+        self.assertIn("yt-dlp version is untested", self.output.getvalue())
+
+    @patch("universal_downloader.cli.sys.frozen", True, create=True)
+    @patch("universal_downloader.cli.find_ffmpeg", return_value=None)
+    @patch("universal_downloader.cli.find_js_runtime", return_value=None)
+    def test_frozen_doctor_points_to_complete_release_instead_of_source_installer(self, runtime, ffmpeg):
+        self.assertEqual(main(["--doctor"]), 1)
+        self.assertIn("unidown.exe --install-tools", self.output.getvalue())
+        self.assertNotIn("Run install.cmd", self.output.getvalue())
 
 
 if __name__ == "__main__":

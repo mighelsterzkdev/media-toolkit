@@ -1,0 +1,38 @@
+name: Build portable Windows release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: python -B -m pip install -c constraints.txt -e . pyinstaller==6.22.3
+      - run: python -B -m universal_downloader.compatibility
+      - run: python -B scripts/install_tools.py
+      - run: python -B -m unittest discover -s tests -v
+      - run: python -B scripts/build_windows.py
+      - name: Check portable executable
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem -LiteralPath dist -Directory | Select-Object -First 1
+          $executable = Join-Path $bundle.FullName 'unidown.exe'
+          python -B scripts/verify_portable.py $executable --bootstrap
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v7
+        with:
+          name: portable-windows-release
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error

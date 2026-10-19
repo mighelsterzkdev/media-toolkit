@@ -1,6 +1,6 @@
 # Universal Downloader
 
-Paste a link, check the available content, and choose **Original (recommended)** or a compatible format before downloading.
+A small terminal app for saving video, audio, images, and animations from a URL. It checks the link first, then lets you choose the original or a compatible conversion.
 
 **Python · yt-dlp · FFmpeg · Pillow · Windows / Linux / macOS**
 
@@ -8,167 +8,190 @@ Paste a link, check the available content, and choose **Original (recommended)**
 UNIVERSAL DOWNLOADER
 Check a link, then choose the original or another format.
 
-Paste the URL (Enter to exit): https://example.com/video
+Paste the URL (Enter to exit): https://example.com/animation
 
 Checking the URL...
 
-Title: My video
-Duration: 2:30
-Available: Video, Audio, Thumbnail
+Title: My animation
+Available: Animation
 
-1. Video
-2. Audio
-3. Thumbnail
+1. Original GIF (recommended)
+2. MP4 video (H.264 / AAC)
 0. Another URL
-Download [1]: 3
-
-1. Original JPG (recommended)
-2. PNG image
-3. JPG image
-0. Another URL
-Save as [1]: 1
+Save as [1]: 2
 
 Saved:
-.../downloads/My video [identifier] [image].jpg
-
-Paste the URL (Enter to exit):
+.../downloads/My animation [source-identifier] [animation-mp4].mp4
 ```
 
-## How it works
+## Windows portable release
 
-- Check the link before offering download choices. Only show verified content.
-- Choose the content when a link has multiple kinds, then choose **Original (recommended)** or a compatible conversion. Downloading starts only after that choice.
-- **Video:** keep the source streams and use the best available quality. Separate video and audio streams are merged without re-encoding.
-- **Audio:** download the original audio file when available. If the audio is inside a video, copy its audio stream into a suitable container without re-encoding. An AAC track may become an M4A file; other codecs keep their own compatible container.
-- **Image / thumbnail:** save the exact original bytes of the best reachable image, keeping its format, transparency, metadata, and animation.
-- The menu names the detected asset: **Image**, **Thumbnail**, or **Animation**. A video's static cover is separate from its primary media.
-- **Twitter/X GIFs:** recognize the animated media asset and show **Animation**. If the source delivers the animation as MP4, keep that animated MP4, without downloading its static JPEG preview or converting it to GIF. The image download command handles these animations automatically.
-- **TikTok sound links:** `/music/...` pages resolve to their original audio, with the usual recommended download and optional conversion menu. The adapter uses the sound's public metadata or checks associated posts for the exact same sound ID. It downloads the tagged audio file, preserving its format; it does not substitute a video's mixed audio or a cover image. Unavailable sounds produce an audio-specific error.
-- Even a link containing only one kind of media shows the output menu before downloading. Press Enter to select the recommended original, or **0** to choose another URL.
-- The recommended option includes the original format when it is known, such as **Original MP4** or **Original PNG**. Merged video and extracted audio keep a generic label when their final container cannot be identified in advance.
-- Completed files are kept and reported as **Already downloaded**.
-- After a download or a failed link, paste another URL in the same session. Enter on an empty URL exits; **0** goes back from the download menu.
-- Reuse inspected metadata, cookies created by the source website, and image bytes when downloading.
-- Resume partial downloads when supported. Show progress, transfer speed, and time remaining.
+1. Download the Windows x64 ZIP and `SHA256SUMS.txt` from [GitHub Releases](https://github.com/mighelsterzkdev/universal-downloader/releases).
+2. Extract the complete ZIP into a writable folder. Keep `_internal` beside `unidown.exe`.
+3. Open **start.cmd**. Python and administrator access are not required.
+4. On first use, the app downloads its pinned FFmpeg/ffprobe and Deno archives directly from their publishers, verifies their SHA-256 checksums, and stores them in `.tools` beside the app. This first setup needs Internet access.
 
-Original downloads do not ask for encoding settings. "Original" means the media made available by the website, which may already be compressed by that website.
-
-## Optional conversion
-
-Every link pasted into the interactive session shows the recommended original as option **1**, followed by compatible conversions that pass the known duration and tool checks. For example, an animation delivered as MP4 offers:
-
-```text
-1. Original MP4 (recommended)
-2. GIF animation
-3. MP4 video
-0. Another URL
-Save as [1]:
-```
-
-The available formats depend on the detected content:
-
-| Detected content | Optional formats |
-| --- | --- |
-| Video | MP4 (H.264 + AAC for compatibility) |
-| Audio | MP3 |
-| Image or thumbnail | PNG, JPG |
-| Animation | GIF, MP4 |
-
-Conversions can change quality; they do not restore lost source detail. Animated content is not offered static-image conversions. Re-encoding an animation as GIF supports up to **30 seconds**, at 15 fps and up to 720 pixels on the longest side. GIF conversion is hidden when the known duration exceeds that limit, and conversions requiring missing tools are hidden too. Unknown animation durations are checked after downloading the source. Original downloads and unchanged native GIF files are not restricted by the conversion limit. Images and MP3/GIF files already in the requested format are kept without re-encoding when supported.
-
-Conversion uses the same inspected source and downloads it once into a private work folder. Only the completed result appears in the output folder. Temporary work is cleaned after success, failure, or cancellation, and completed results are reused.
-
-Original images, extracted audio, and converted files are staged and flushed before publication. Existing files are preserved even when two downloads finish together. Abrupt process termination during staging does not expose a partial file under the final name, though a private work folder may remain after a forced exit.
-
-Direct commands are also available:
+Downloads go into the extracted folder's `downloads` directory when launched through `start.cmd`. From another terminal directory, either use `--output` or open `start.cmd` to keep that location predictable.
 
 ```powershell
-.\start.cmd "https://example.com/video" --convert mp3
-.\start.cmd "https://example.com/video" --convert mp4
-.\start.cmd "https://example.com/animation" --convert gif
-.\start.cmd "https://example.com/photo.webp" --convert png
+# Check the ZIP against the published checksum before extraction
+Get-FileHash .\universal-downloader-0.5.0-windows-x64.zip -Algorithm SHA256
+
+# Prepare the external tools without opening the menu
+.\unidown.exe --install-tools
+
+# Diagnose the installation; this command does not download tools
+.\unidown.exe --doctor
 ```
 
-Use `--type` to choose a specific source asset when needed, such as `--type image --convert jpg` for a thumbnail. `jpeg` is accepted as an alias for `jpg`. No conversion happens without the command or menu selection.
+To update the portable version, extract a newer **complete** release into a new folder. Keep your downloaded media wherever you prefer. Replacing only the EXE can mix incompatible bundled libraries. Releases are unsigned; checksums verify archive integrity.
 
-## Quick start on Windows
+## Run from source
 
-1. Install [Python 3.10 or later](https://www.python.org/downloads/) and select **Add Python to PATH**.
-2. Open **install.cmd** and wait for setup to finish.
-3. Open **start.cmd** and paste a URL.
+### Windows
 
-Downloads are saved inside the project's **downloads/** directory. The installer prepares a **.venv** and portable FFmpeg/ffprobe and Deno inside **.tools**. These tools are excluded from Git and are not added to the system PATH. Installer assets are verified against the SHA-256 checksums published with their releases.
+Install [Python 3.10+](https://www.python.org/downloads/), open **install.cmd**, then open **start.cmd**. Setup creates a local `.venv`, installs the tested Python dependency set, and prepares the portable tools in `.tools`. Neither folder is added to the system PATH.
 
-Run **update.cmd** when a supported website stops working. It updates yt-dlp and Pillow.
-
-```powershell
-# Open the interactive menu
-.\start.cmd
-
-# Download the best available original media automatically
-.\start.cmd "https://example.com/video"
-
-# Keep only the original audio
-.\start.cmd "https://example.com/video" --type audio
-
-# Save the original thumbnail
-.\start.cmd "https://example.com/video" --type image
-
-# Download a direct image without converting it
-.\start.cmd "https://example.com/photo.webp"
-
-# Choose a download folder
-.\start.cmd "https://example.com/video" --output "D:\Videos"
-
-# Check the installation
-.\start.cmd --doctor
-
-# Show technical details when troubleshooting
-.\start.cmd "https://example.com/video" --verbose
-```
-
-Quote URLs, especially when they contain `&`. Type names are case-insensitive, and `thumbnail` is an alias for `image`. Existing `--format video|audio|image` commands still work as aliases for `--type`. Converted formats use the separate `--convert` option; manual bitrate and resolution settings are not part of the normal flow.
-
-To use a specific Python installation:
+To select a specific Python installation:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -Python 'C:\path\to\python.exe'
 ```
 
-## Linux, macOS, and manual installation
+After updating the project source, run **update.cmd**. It restores the dependency versions pinned by that release and checks the extractor adapter contract. It deliberately does not install an untested latest yt-dlp version. If a website changes, check for a newer application release.
 
-Install Python 3.10+, [FFmpeg and ffprobe](https://ffmpeg.org/download.html), and [Deno 2.3+](https://docs.deno.com/runtime/getting_started/installation/) or [Node.js 22+](https://nodejs.org/). Add the executables to PATH.
+### Linux and macOS
+
+Install Python 3.10+, [FFmpeg and ffprobe](https://ffmpeg.org/download.html), and a supported [Deno](https://docs.deno.com/runtime/getting_started/installation/) or [Node.js](https://nodejs.org/) runtime on PATH. The Windows installer uses the tested Deno 2.9.7 build; runtime discovery accepts Deno 2.3+ or Node.js 22+.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -e .
+.venv/bin/python -B -m pip install -c constraints.txt -e .
 .venv/bin/python -B -m universal_downloader --doctor
 .venv/bin/python -B -m universal_downloader
-.venv/bin/python -B -m universal_downloader "https://example.com/video" --type audio
 ```
 
-On Windows, use `.venv\Scripts\python.exe`. An activated virtual environment also provides the `unidown` command. With manual launches, the default download folder is relative to the current terminal directory.
+An activated environment also provides the `unidown` command. On Windows, the equivalent Python executable is `.venv\Scripts\python.exe`.
 
-## Compatibility
+## Choosing what to save
 
-The app uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) for video and audio extraction. Site changes and access restrictions can affect downloads; a successful content check cannot guarantee later access.
+The interactive session never starts the requested media download before you choose an output. It may read page data, image bytes, and bounded media probes while checking what is actually available.
 
-One item is downloaded at a time. Playlists, live video/audio, user-account login, and DRM-protected media are not supported. Live videos may still expose a downloadable thumbnail.
+- If a page contains several media items, choose the item first. A video, its audio track, and its thumbnail are then separate choices when available.
+- Even a single item shows an output menu. Press Enter for the recommended option, or **0** to return to the URL prompt.
+- Original video keeps the website's streams; separate video and audio streams are merged without re-encoding.
+- Original audio keeps an audio-only source as supplied. When extracted from a video, its encoded audio packets are copied into a compatible container without re-encoding.
+- Original images keep their exact bytes, including format, transparency, metadata, and animation. A static thumbnail is labeled separately from primary media.
+- Native copies such as MP3 → MP3 and GIF → GIF are omitted from the menu. MP4 remains an explicit compatibility conversion because its source codecs may differ.
+- A failed link returns to the URL prompt. Enter on an empty prompt exits; Ctrl+C cancels.
 
-Thumbnails must be exposed by the source page. A direct video file often has no thumbnail; use its webpage URL instead. Direct image URLs and Open Graph, Twitter image tags, and video posters are supported. Images are limited to **32 MB** and **40 million pixels** and can be saved without FFmpeg.
+"Original" means what the website makes available, which may already be compressed. It cannot recover the uploader's source quality.
 
-## Development
+| Content | Optional conversions |
+| --- | --- |
+| Video | MP4 with H.264 video and AAC audio |
+| Audio | MP3 |
+| Image or thumbnail | PNG, JPG |
+| Animation | GIF, MP4 |
+
+Animation is never silently converted to a still image. GIF re-encoding supports up to **30 seconds**, at 15 fps and up to 720 pixels on the longest side. Longer known animations and conversions requiring unavailable tools are hidden from the menu. Unknown durations are validated after the source is downloaded. Unchanged native GIF downloads have no 30-second conversion limit.
+
+## Links and media discovery
+
+Video/audio extraction uses [yt-dlp](https://github.com/yt-dlp/yt-dlp), with additional image and page discovery. Direct media URLs do not have to end in a recognizable extension: response content and readable media determine what can be offered.
+
+Google image-result and redirect links are resolved to their underlying public source when that URL is exposed. Public pages can expose media through image metadata, image/video elements, and related media links. When several verified candidates are found, the app offers a numbered choice instead of silently saving a preview. A GIF found through a search result can therefore remain animated or be explicitly converted to MP4.
+
+Special cases include Twitter/X GIF posts, whose native animation is usually an MP4 rather than a GIF file, and TikTok `/music/...` links, which resolve to the exact tagged sound. A TikTok sound is not replaced by a video's mixed soundtrack or cover image.
+
+Search pages and websites vary. A link with no usable public media URL, an expired asset, a login requirement, a region/IP restriction, or a JavaScript-only page can still be unavailable. The app does not use a signed-in browser session. It does not bypass DRM or access controls, process playlists in bulk, or record live streams. A live page may still expose a thumbnail. Site support can change independently of the app.
+
+Images are limited to **32 MB** and **40 million pixels**. Discovery and media probes are bounded; the app does not recursively crawl an entire site. A successful check cannot guarantee that a source remains accessible during the subsequent download.
+
+## Commands and optional limits
+
+Commands with a URL are noninteractive: they save the selected/default original or explicit conversion immediately. The confirmation menu is the behavior of an interactive session started without a URL.
 
 ```powershell
-.\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
+# Open the interactive menu
+.\start.cmd
+
+# Save the best available original
+.\start.cmd "https://example.com/video"
+
+# Save original audio, or convert explicitly to MP3
+.\start.cmd "https://example.com/video" --type audio
+.\start.cmd "https://example.com/video" --convert mp3
+
+# Convert an animated image to MP4
+.\start.cmd "https://example.com/animation.gif" --convert mp4
+
+# Select one item when a page exposes several
+.\start.cmd "https://example.com/gallery" --item 2
+
+# Limit source height and source/completed file size
+.\start.cmd "https://example.com/video" --max-height 720 --max-size 100MiB
+
+# Choose a folder or show technical diagnostics
+.\start.cmd "https://example.com/video" --output "D:\Videos"
+.\start.cmd "https://example.com/video" --verbose
 ```
 
-Tests use temporary local HTTP fixtures. They verify original image/video bytes, audio packet hashes before and after extraction, converted codecs and animation frames, unchanged audio-only files, stream merging, temporary-file cleanup, completed-file preservation, thumbnail fallback, metadata and cookie reuse, and repeated downloads in the terminal. Storage tests also force a child process to exit during saving and race concurrent publishers to verify complete outputs and preservation of existing files. CI installs FFmpeg on Windows and Linux.
+`--max-height` prefers a source rendition at or below that height. With an explicit video/animation conversion, it can scale the source down when necessary; it does not upscale. Original static images retain their dimensions, and the limit does not apply to audio.
 
-Source adapters preserve provider metadata before inspection; the Twitter adapter retains the API's declared media type, and `tiktok.py` resolves public sound metadata while verifying sound IDs. TikTok metadata lookup checks at most three associated posts and uses yt-dlp's existing web extractor. Site restrictions can still prevent access. `inspection.py` describes content and asset roles, `downloader.py` handles original downloads, and `conversions.py` handles optional local transformations. Converters do not extract URLs or choose thumbnails.
+`--max-size` limits the combined selected source bytes (video plus audio when separate) and the actual completed file size. Known sizes are checked before transfer; supported unknown-size transfers stop when download progress exceeds the budget, and the final bytes are checked before publication. This cap supports HTTP/HTTPS downloads, DASH, and ISM. HLS, RTMP/RTSP, and other external streaming protocols are refused when a cap is set because their full transfer cannot be monitored reliably. Remove the cap to use the normal download behavior for those links. The limit is **not** target-size compression or whole-session bandwidth accounting: bounded page/image inspection happens before output selection. Limits are optional and do not add prompts to normal use.
 
-The launcher and test commands use `-B` to avoid source bytecode caches. Keep **.venv/** and **.tools/** to run without reinstalling. **tests/** and **.github/workflows/** contain automated checks. Downloaded media, caches, and generated package metadata are excluded from Git.
+Quote URLs containing `&`. Type names are case-insensitive; `thumbnail` aliases `image`, and `jpeg` aliases `jpg`. Existing `--format video|audio|image` commands alias `--type`. Run `--help` for the complete interface. The portable EXE accepts the same download flags.
+
+## Existing files and download history
+
+Files are identified by their source, provider ID or canonical URL, asset role, and requested output settings. A matching title and ID from another source is not enough to count as an existing download.
+
+The local history records completed filenames, sizes, and SHA-256 hashes. A file is reported as **Already downloaded** only after its bytes match that record. Modified, conflicting, or older unverified files are preserved; a new output gets a different filename rather than overwriting them. Files from earlier versions may therefore be downloaded once again under the new naming scheme.
+
+The index lives outside media folders:
+
+- Windows: `%LOCALAPPDATA%\UniversalDownloader\downloads.sqlite3`
+- Linux/macOS: `$XDG_STATE_HOME/universal-downloader/downloads.sqlite3`, or `~/.local/state/universal-downloader/downloads.sqlite3`
+- Override the directory with `UNIDOWN_DATA_DIR` when needed.
+
+Deleting this index does not delete media, but prevents trusted reuse until a new completed download is recorded. Final outputs are staged before publication, and existing files are preserved under simultaneous saves. Normal success, errors, and Ctrl+C clean temporary work. A forced process termination may leave a private temporary directory, without exposing that partial file as a completed output.
+
+## Development and verification
+
+```powershell
+# Deterministic tests using local fixtures
+.\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
+
+# Check the tested dependency metadata and adapter hooks
+.\.venv\Scripts\python.exe -B -m universal_downloader.compatibility
+
+# Explicit real-site checks; no background scheduling
+.\.venv\Scripts\python.exe -B scripts/live_smoke.py --output dist/live-smoke.json
+
+# Download, decode, and convert animation examples using temporary storage
+.\.venv\Scripts\python.exe -B scripts/live_smoke.py --download --case direct-gif --output dist/live-media.json
+```
+
+`constraints.txt` pins the dependency set tested by the Windows/Linux Python 3.10, 3.12, and 3.14 matrix. Adapter tests exercise the provider metadata on which the app relies. Local fixtures check original bytes and audio packet hashes, codecs and animation frames, media discovery, errors, size/height limits, cache verification, races and interrupted saves. They do not prove that every live website currently works.
+
+The separate **Live site smoke checks (manual)** workflow runs selected public examples on request and publishes a JSON report. It can inspect metadata only, or download and decode actual files and convert animated examples to MP4. Access restrictions, network conditions, removed examples, and site changes may cause failures; the report states exactly which URLs were checked.
+
+### Build the Windows ZIP
+
+Run on Windows x64 using a separate build environment:
+
+```powershell
+python -B -m venv .tools/build-env
+.\.tools\build-env\Scripts\python.exe -B -m pip install -c constraints.txt -e . pyinstaller==6.22.3
+.\.tools\build-env\Scripts\python.exe -B scripts/build_windows.py --output dist/release
+.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/release/universal-downloader-0.5.0-windows-x64/unidown.exe --bootstrap
+```
+
+Use a new output directory for each build. The build produces the complete folder, a ZIP, and `SHA256SUMS.txt`. It checks the executable archive to exclude optional Mutagen and build-time PyInstaller modules. The verifier removes Python and external tools from PATH, checks the bundled executable, preserves local image/video originals, converts GIF animation to H.264 MP4, extracts original AAC audio, converts MP3, and verifies cached reuse. Its temporary download history is isolated from the user's history. The **Build portable Windows release** workflow builds and checks the same artifacts on tagged versions or manual runs; it does not publish a release automatically.
+
+Keep `.venv/` and `.tools/` to avoid reinstalling source dependencies. Downloaded media, generated builds, caches, and package metadata are excluded from Git. Launchers and documented Python commands use `-B` to avoid source bytecode caches.
 
 ## License
 
-The project code uses the [MIT license](LICENSE). Dependencies retain their own licenses: [yt-dlp](https://github.com/yt-dlp/yt-dlp#licensing), [FFmpeg](https://ffmpeg.org/legal.html), [Pillow](https://github.com/python-pillow/Pillow/blob/main/LICENSE), and [Deno](https://github.com/denoland/deno/blob/main/LICENSE.md).
+Project code uses the [MIT license](LICENSE). Dependencies retain their own licenses. The portable ZIP includes Python/library notices and unmodified certifi source. It excludes the optional Mutagen metadata editor and build-time PyInstaller Python modules. External FFmpeg and Deno binaries are downloaded directly from their publishers on first use instead of being redistributed inside the application ZIP. Their pinned release URLs, checksums, and notices are retained locally.

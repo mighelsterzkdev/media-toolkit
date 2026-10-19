@@ -1,0 +1,38 @@
+name: Live site smoke checks (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      download:
+        description: Also download each sample into temporary storage
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  live-sites:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: python -B -m pip install -c constraints.txt -e .
+      - run: python -B scripts/install_tools.py
+      - name: Inspect public examples
+        shell: pwsh
+        run: |
+          $arguments = @('-B', 'scripts/live_smoke.py', '--output', 'live-smoke.json')
+          if ('${{ inputs.download }}' -eq 'true') { $arguments += '--download' }
+          python @arguments
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: live-smoke-report
+          path: live-smoke.json
+          if-no-files-found: warn

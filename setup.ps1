@@ -31,8 +31,10 @@ try {
     }
     & $venvPython -m pip install --upgrade pip
     if ($LASTEXITCODE -ne 0) { throw 'Could not prepare pip. Check your internet connection.' }
-    & $venvPython -m pip install -e .
+    & $venvPython -B -m pip install --upgrade -c constraints.txt -e .
     if ($LASTEXITCODE -ne 0) { throw 'Could not install Python dependencies.' }
+    & $venvPython -B -m universal_downloader.compatibility
+    if ($LASTEXITCODE -ne 0) { throw 'The installed dependencies do not match this tested release.' }
     & $venvPython -B -X utf8 (Join-Path $PSScriptRoot 'scripts\install_tools.py')
     if ($LASTEXITCODE -ne 0) { throw 'Could not install the download tools.' }
     & $venvPython -B -X utf8 -m universal_downloader --doctor

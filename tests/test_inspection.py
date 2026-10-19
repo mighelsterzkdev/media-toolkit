@@ -1,9 +1,30 @@
+import io
 import unittest
+
+from PIL import Image
 
 from universal_downloader.inspection import MediaInspection
 
 
 class OriginalFormatTests(unittest.TestCase):
+    def test_verified_image_dimensions_are_read_without_changing_bytes(self):
+        with io.BytesIO() as encoded:
+            Image.new("RGBA", (31, 17), "red").save(encoded, "PNG")
+            data = encoded.getvalue()
+        inspected = MediaInspection("https://example.com/image", {}, ("image",), image_data=data)
+        self.assertEqual(inspected.image_dimensions, (31, 17))
+        self.assertEqual(inspected.image_data, data)
+
+    def test_deferred_or_unreadable_image_dimensions_are_unknown(self):
+        for data in (None, b"not an image"):
+            with self.subTest(data=data):
+                inspected = MediaInspection("https://example.com/image", {}, ("image",), image_data=data)
+                self.assertIsNone(inspected.image_dimensions)
+
+    def test_single_asset_inspection_keeps_backward_compatible_default(self):
+        inspected = MediaInspection("https://example.com/image", {}, ("image",))
+        self.assertEqual(inspected.alternatives, ())
+
     def test_verified_image_format_takes_precedence_over_page_format(self):
         inspected = MediaInspection("https://example.com/page", {"ext": "mp4"}, ("image",), image_extension="png")
         self.assertEqual(inspected.original_extension("image"), "png")
