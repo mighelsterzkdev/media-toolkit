@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from PIL import Image, UnidentifiedImageError
 
 from .errors import DownloadError
+from .dependencies import hidden_process_options
 
 
 def validate_limits(max_height: int | None, max_size: int | None) -> None:
@@ -147,7 +148,7 @@ def validate_file_limits(path: Path, *, max_size: int | None, max_height: int | 
             raise DownloadError("FFmpeg and ffprobe are required to verify --max-height. Run install.cmd.")
         executable = ffmpeg / ("ffprobe.exe" if (ffmpeg / "ffprobe.exe").is_file() else "ffprobe")
         try:
-            result = subprocess.run([str(executable), "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height", "-of", "json", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, check=True)
+            result = subprocess.run([str(executable), "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height", "-of", "json", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, check=True, **hidden_process_options())
             streams = json.loads(result.stdout).get("streams") or []
             height = streams[0].get("height") if streams else None
         except (OSError, ValueError, subprocess.SubprocessError) as error:

@@ -4,3 +4,6 @@
 *.toml text eol=lf
 *.yml text eol=lf
 *.cmd text eol=crlf
+desktop-ui/** text eol=lf
+src/universal_downloader/desktop_assets/** text eol=lf -whitespace
+third_party/** text eol=lf -whitespace

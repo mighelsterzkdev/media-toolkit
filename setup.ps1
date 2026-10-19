@@ -31,7 +31,7 @@ try {
     }
     & $venvPython -m pip install --upgrade pip
     if ($LASTEXITCODE -ne 0) { throw 'Could not prepare pip. Check your internet connection.' }
-    & $venvPython -B -m pip install --upgrade -c constraints.txt -e .
+    & $venvPython -B -m pip install --upgrade -c constraints.txt -e '.[desktop]'
     if ($LASTEXITCODE -ne 0) { throw 'Could not install Python dependencies.' }
     & $venvPython -B -m universal_downloader.compatibility
     if ($LASTEXITCODE -ne 0) { throw 'The installed dependencies do not match this tested release.' }

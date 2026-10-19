@@ -11,6 +11,7 @@ from pathlib import Path
 from PIL import Image, UnidentifiedImageError
 
 from .errors import DownloadError
+from .dependencies import hidden_process_options
 from .formats import MEDIA_TYPES
 
 
@@ -106,7 +107,7 @@ def _probe_streams(source: dict, information: dict, ffmpeg: Path, cookiejar=None
         command.extend(["-headers", "".join(f"{key}: {value}\r\n" for key, value in headers.items())])
     command.extend(["-show_streams", "-show_format", "-of", "json", url])
     try:
-        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15, **hidden_process_options())
         if result.returncode:
             return None
         return json.loads(result.stdout)

@@ -4,15 +4,24 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "universal-downloader"
-version = "0.6.0"
-description = "Download videos, audio, images, and thumbnails from a URL in your terminal."
+version = "0.7.0"
+description = "Download videos, audio, images, and animations with a desktop app or terminal."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 dependencies = ["yt-dlp[default]==2026.8.19", "yt-dlp-ejs==0.8.0", "Pillow==12.3.0"]
 
+[project.optional-dependencies]
+desktop = ["pywebview==6.2.1"]
+
 [project.scripts]
 unidown = "universal_downloader.cli:main"
 
+[project.gui-scripts]
+unidown-gui = "universal_downloader.gui:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+universal_downloader = ["desktop_assets/*", "desktop_assets/assets/*"]

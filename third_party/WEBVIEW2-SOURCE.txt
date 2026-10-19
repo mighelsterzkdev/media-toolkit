@@ -1,0 +1,4 @@
+Microsoft.Web.WebView2 SDK 1.0.3856.49
+Bundled by pywebview 6.2.1. SDK license files are preserved alongside this notice.
+Source package: https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.3856.49/microsoft.web.webview2.1.0.3856.49.nupkg
+WebView2 Runtime is provided by the user system, not redistributed in this ZIP.

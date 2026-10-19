@@ -1,0 +1,143 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 240 10% 4%; --foreground: 0 0% 98%;
+    --primary: 0 0% 98%; --primary-foreground: 240 6% 10%;
+    --secondary: 240 4% 16%; --secondary-foreground: 0 0% 98%;
+    --muted: 240 4% 16%; --muted-foreground: 240 5% 65%;
+    --accent: 240 4% 16%; --accent-foreground: 0 0% 98%;
+    --destructive: 0 63% 40%; --destructive-foreground: 0 0% 98%;
+    --border: 240 4% 20%; --input: 240 4% 24%; --ring: 240 5% 75%; --radius: 0.5rem;
+    font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+  }
+  * { @apply border-border; }
+  body { @apply bg-background text-base text-foreground; margin: 0; min-width: 480px; line-height: 1.5; }
+  button, input, textarea { font: inherit; }
+  button { -webkit-app-region: no-drag; }
+  input[type='number'] { appearance: textfield; -moz-appearance: textfield; }
+  input::-webkit-inner-spin-button, input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  ::selection { @apply bg-secondary text-foreground; }
+  :focus-visible { outline-offset: 3px; }
+}
+
+@layer components {
+  .app-shell { @apply mx-auto flex min-h-screen max-w-[960px] flex-col px-8; }
+  .app-header { @apply flex items-center justify-between gap-4 py-6; }
+  .app-header h1 { @apply text-2xl font-semibold tracking-tight; }
+  .notice { @apply mb-4 flex items-center gap-4 rounded-md border bg-muted/30 p-4 text-sm leading-6 text-foreground; }
+  .notice > span { @apply min-w-0 flex-1; }
+  .notice-error { @apply border-destructive/50 text-red-300; }
+  .download-card { @apply min-w-0; }
+  .section-heading { @apply flex min-h-10 items-center justify-between gap-4; }
+  .section-heading h2 { @apply text-base font-semibold; }
+  .new-download-heading { @apply mb-2; }
+  .new-download-heading > button { @apply text-muted-foreground; }
+  .url-form { @apply flex items-center gap-2; }
+  .url-input { @apply relative min-w-0 flex-1; }
+  .url-input > svg { @apply pointer-events-none absolute left-4 top-1/2 z-10 -translate-y-1/2 text-muted-foreground; }
+  .url-input input { @apply pl-12; }
+  .url-form > button { @apply h-11 min-w-28; }
+  .url-hint { @apply py-4 text-sm leading-6 text-muted-foreground; }
+  .checking-state { @apply flex items-center gap-2 py-6 text-sm text-muted-foreground; }
+  .inspection-error { @apply my-4 flex gap-4 rounded-md border border-destructive/50 p-4 text-red-300; }
+  .inspection-error p { @apply mb-2 text-base font-medium; }
+  .inspection-error span { @apply break-words text-sm leading-6; }
+  .inspected-result { @apply min-w-0; }
+  .media-summary { @apply flex items-center gap-4 py-4; }
+  .media-thumbnail { @apply h-[72px] w-32 shrink-0 rounded-md border object-cover; }
+  .media-placeholder { @apply flex items-center justify-center bg-muted text-muted-foreground; }
+  .media-description { @apply min-w-0; }
+  .source-name { @apply text-sm text-muted-foreground; }
+  .media-description h3 { @apply line-clamp-2 text-base font-semibold leading-6; }
+  .media-description > p { @apply line-clamp-1 text-sm leading-6 text-muted-foreground; }
+  .download-options { @apply pb-4; }
+  .kind-options { @apply mb-4 flex w-fit flex-wrap gap-2; }
+  .kind-option { @apply relative flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-transparent px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground; }
+  .kind-option.selected { @apply border-input bg-secondary text-secondary-foreground; }
+  .kind-option:has(:focus-visible) { @apply ring-2 ring-ring ring-offset-2 ring-offset-background; }
+  .format-options { @apply flex flex-wrap gap-x-8 gap-y-4; }
+  .format-option { @apply flex min-h-12 cursor-pointer items-start gap-2 py-1; }
+  .format-option > button { @apply mt-1 shrink-0; }
+  .format-option-copy { @apply min-w-0; }
+  .format-title { @apply flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium leading-6; }
+  .recommended-badge { @apply inline-flex items-center rounded-md bg-secondary px-2 text-sm font-normal leading-6 text-secondary-foreground; }
+  .format-description { @apply block text-sm font-normal leading-6 text-muted-foreground; }
+  .download-footer { @apply flex items-center justify-between gap-4 border-y py-4; }
+  .folder-destination { @apply flex min-w-0 flex-1 items-center gap-2 text-muted-foreground; }
+  .folder-destination > div { @apply min-w-0; }
+  .folder-destination span { @apply text-sm; }
+  .folder-destination p { @apply max-w-[440px] truncate text-sm text-foreground; }
+  .folder-destination > button { @apply h-10 shrink-0 gap-2 px-4 text-sm; }
+  .download-button { @apply h-11 min-w-36 text-sm font-medium; }
+  .downloads-section { @apply pb-6 pt-4; }
+  .downloads-section > .section-heading { @apply mb-2; }
+  .downloads-section > .section-heading button { @apply text-sm text-muted-foreground; }
+  .count-badge { @apply rounded-md bg-secondary px-2 text-sm leading-6 text-secondary-foreground; }
+  .empty-downloads { @apply flex items-center gap-4 rounded-md border border-dashed p-6 text-muted-foreground; }
+  .empty-downloads p { @apply text-base text-foreground; }
+  .empty-downloads span { @apply text-sm; }
+  .task-list { @apply overflow-hidden rounded-md border; }
+  .task-row { @apply flex min-h-20 items-start gap-4 border-b p-4 last:border-b-0; }
+  .task-icon { @apply flex size-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground; }
+  .task-icon-done { @apply text-emerald-400; }
+  .task-icon-failed { @apply text-red-300; }
+  .task-content { @apply min-w-0 flex-1; }
+  .task-title { @apply truncate text-base font-medium leading-6; }
+  .task-meta { @apply flex flex-wrap items-center gap-x-2 gap-y-1 text-sm leading-6 text-muted-foreground; }
+  .task-eta { @apply ml-auto; }
+  .task-content [role='progressbar'] { @apply mt-2 h-1 bg-secondary; }
+  .task-content [role='progressbar'] > div { @apply bg-primary; }
+  .task-error { @apply mt-2 break-words text-sm leading-6 text-red-300; }
+  .task-actions { @apply flex shrink-0 items-center; }
+  .task-actions button { @apply size-10 text-muted-foreground; }
+  .task-actions button svg { @apply size-4; }
+  .app-footer { @apply mt-auto flex justify-between gap-4 border-t py-4 text-sm text-muted-foreground; }
+  .settings-dialog { @apply max-w-[560px]; }
+  [role='dialog'] { @apply max-h-[90vh] w-[calc(100%-32px)] overflow-y-auto rounded-lg bg-background text-base; }
+  .settings-limits { @apply grid grid-cols-2 gap-4; }
+  .unit-input { @apply relative; }
+  .unit-input input { @apply pr-12; }
+  .unit-input > span { @apply pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-sm text-muted-foreground; }
+  .field-help { @apply text-sm leading-6 text-muted-foreground; }
+  .inline-error { @apply text-sm leading-6 text-red-300; }
+  .resume-settings { @apply flex items-center justify-between gap-4 rounded-md border p-4; }
+  .resume-settings p { @apply text-sm font-medium; }
+  .resume-settings span { @apply block text-sm text-muted-foreground; }
+  .asset-picker { @apply mt-4 space-y-2; }
+  .asset-options { @apply max-h-64 overflow-y-auto; }
+  .asset-option { @apply flex cursor-pointer items-center gap-2 rounded-md border p-4; }
+  .asset-option.selected { @apply border-ring bg-accent; }
+  .asset-option > span { @apply min-w-0; }
+  .asset-option strong { @apply block truncate text-base font-medium; }
+  .asset-option small { @apply block text-sm font-normal text-muted-foreground; }
+}
+
+.progress-indeterminate > div { transform: none !important; width: 30%; animation: progress-slide 1.5s ease-in-out infinite; }
+@keyframes progress-slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+@media (max-width: 760px) {
+  .app-shell { padding-left: 24px; padding-right: 24px; }
+  .folder-destination p { max-width: 240px; }
+  .tools-notice { flex-wrap: wrap; }
+  .format-options { gap: 16px 24px; }
+}
+@media (max-width: 560px) {
+  .app-shell { padding-left: 16px; padding-right: 16px; }
+  .app-header h1 { font-size: 24px; }
+  .new-download-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .new-download-heading > button { margin-left: -12px; }
+  .download-footer { flex-wrap: wrap; }
+  .folder-destination { flex-basis: 100%; }
+  .folder-destination p { max-width: 260px; }
+  .download-button { width: 100%; }
+  .task-eta { margin-left: 0; }
+  .task-row { gap: 8px; padding: 16px 8px; }
+  .settings-limits { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}

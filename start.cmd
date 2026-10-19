@@ -7,6 +7,11 @@ if not exist "%~dp0.venv\Scripts\python.exe" (
     exit /b 1
 )
 pushd "%~dp0"
+if "%~1"=="" (
+    start "" "%~dp0.venv\Scripts\pythonw.exe" -B -X utf8 -m universal_downloader.gui
+    popd
+    exit /b 0
+)
 "%~dp0.venv\Scripts\python.exe" -B -X utf8 -m universal_downloader %*
 set "result=%errorlevel%"
 popd

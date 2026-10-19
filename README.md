@@ -1,8 +1,9 @@
 # Universal Downloader
 
-A small terminal app for saving video, audio, images, and animations from a URL. It checks the link first, then lets you choose the original or a compatible conversion.
+A desktop app and terminal tool for saving video, audio, images, and animations from a URL. Check the link first, choose the original or an available conversion, then download.
 
-**Python · yt-dlp · FFmpeg · Pillow · Windows / Linux / macOS**
+**Desktop: Windows 10/11 · React / shadcn/ui / pywebview**
+**Download engine and terminal: Python · yt-dlp · FFmpeg · Pillow · Windows / Linux / macOS**
 
 ```text
 UNIVERSAL DOWNLOADER
@@ -24,18 +25,34 @@ Saved:
 .../downloads/My animation [source-identifier] [animation-mp4].mp4
 ```
 
+## Desktop app
+
+Open **start.cmd** for the dark desktop interface. It uses bundled React and shadcn/ui components inside Microsoft Edge WebView2; it does not need Node.js or an external website at runtime.
+
+1. Paste a URL and click **Check**. Inspection can be cancelled.
+2. Select a verified media item, choose **Original — Recommended** or an available conversion, and click **Download**.
+3. Follow progress in the queue. Cancel a running/queued item, retry a failed or cancelled item, or open a completed item's folder.
+4. Use **Add multiple links** for several URLs. This explicitly queues each link's recommended original; ambiguous pages report that they need individual selection.
+5. Use **Browse** to select the download folder and **Settings** for optional limits. These use the same remembered preferences as the terminal.
+
+Checks and downloads run in separate worker processes. Cancelling or closing stops the worker and its child tools without freezing the window. Supported interrupted transfers can be retried later. The queue itself is session-only; URLs and media choices are not saved between launches. Existing verified media and interrupted work still use the shared download engine's local history.
+
+The desktop app is tested on Windows x64 and requires the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), normally available on Windows 11. The app uses its own private renderer profile under local application data and does not access your signed-in browser. It loads only the packaged interface and does not open downloaded web pages inside the privileged window.
+
+**start-cli.cmd** opens the original terminal menu. **start.cmd** with arguments still forwards them to the terminal, so existing scripts continue to work. The installed commands are `unidown-gui` for the desktop and `unidown` for the terminal.
+
 ## Windows portable release
 
 1. Download the Windows x64 ZIP and `SHA256SUMS.txt` from [GitHub Releases](https://github.com/mighelsterzkdev/universal-downloader/releases).
-2. Extract the complete ZIP into a writable folder. Keep `_internal` beside `unidown.exe`.
+2. Extract the complete ZIP into a writable folder. Keep `_internal` and `_desktop` beside `unidown.exe` and `unidown-gui.exe`.
 3. Open **start.cmd**. Python and administrator access are not required.
-4. On first use, the app downloads its pinned FFmpeg/ffprobe and Deno archives directly from their publishers, verifies their SHA-256 checksums, and stores them in `.tools` beside the app. This first setup needs Internet access.
+4. If download tools are missing, click **Install tools**. The app downloads pinned FFmpeg/ffprobe and Deno archives directly from their publishers, verifies SHA-256 checksums, and stores them in `.tools` beside the app. Setup reports progress, retries temporary server failures, and explains download, permission, or integrity failures. The terminal prepares missing tools before its first media command.
 
 Downloads go into the extracted folder's `downloads` directory when launched through `start.cmd`. From another terminal directory, either use `--output` or open `start.cmd` to keep that location predictable.
 
 ```powershell
 # Check the ZIP against the published checksum before extraction
-Get-FileHash .\universal-downloader-0.6.0-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\universal-downloader-0.7.0-windows-x64.zip -Algorithm SHA256
 
 # Prepare the external tools without opening the menu
 .\unidown.exe --install-tools
@@ -50,7 +67,7 @@ To update the portable version, extract a newer **complete** release into a new 
 
 ### Windows
 
-Install [Python 3.10+](https://www.python.org/downloads/), open **install.cmd**, then open **start.cmd**. Setup creates a local `.venv`, installs the tested Python dependency set, and prepares the portable tools in `.tools`. Neither folder is added to the system PATH.
+Install [Python 3.10+](https://www.python.org/downloads/), open **install.cmd**, then open **start.cmd**. Setup creates a local `.venv`, installs the tested Python dependency set including the desktop bridge, and prepares the portable tools in `.tools`. The built frontend is committed, so source users do not need Node.js. Neither folder is added to the system PATH.
 
 To select a specific Python installation:
 
@@ -113,8 +130,8 @@ Images are limited to **32 MB** and **40 million pixels**. Discovery and media p
 Commands with a URL are noninteractive: they save the selected/default original or explicit conversion immediately. The confirmation menu is the behavior of an interactive session started without a URL.
 
 ```powershell
-# Open the interactive menu
-.\start.cmd
+# Open the interactive terminal menu
+.\start-cli.cmd
 
 # Save the best available original
 .\start.cmd "https://example.com/video"
@@ -233,14 +250,14 @@ Run on Windows x64 using a separate build environment:
 ```powershell
 python -B -m venv .tools/build-env
 .\.tools\build-env\Scripts\python.exe -B -m pip install -c constraints.txt -e . pyinstaller==6.22.3
-.\.tools\build-env\Scripts\python.exe -B scripts/build_windows.py --output dist/release-0.6.0
-.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/release-0.6.0/universal-downloader-0.6.0-windows-x64/unidown.exe --bootstrap
+.\.tools\build-env\Scripts\python.exe -B scripts/build_windows_gui.py --output dist/release-0.7.0
+.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/release-0.7.0/universal-downloader-0.7.0-windows-x64/unidown.exe --bootstrap
 ```
 
-Use a new output directory for each build. The build produces the complete folder, a ZIP, and `SHA256SUMS.txt`. It checks the executable archive to exclude optional Mutagen and build-time PyInstaller modules. The verifier removes Python and external tools from PATH, checks the bundled executable, preserves local image/video originals, converts GIF animation to H.264 MP4, extracts original AAC audio, converts MP3, verifies cached reuse, runs a link queue, checks remembered preferences, and terminates/restarts a real frozen HTTP download to verify continuation. Its temporary download history is isolated from the user's history. The **Build portable Windows release** workflow builds and checks the same artifacts on tagged versions or manual runs; it does not publish a release automatically.
+Use a new output directory for each build. The desktop build produces both executables, their separate library folders, a complete ZIP, and `SHA256SUMS.txt`. `scripts/build_windows.py` remains available for a terminal-only ZIP. The committed frontend assets and notices are included without installing Node.js on the build machine. It checks the executable archive to exclude optional Mutagen and build-time PyInstaller modules. The verifier removes Python and external tools from PATH, checks the bundled executable, preserves local image/video originals, converts GIF animation to H.264 MP4, extracts original AAC audio, converts MP3, verifies cached reuse, runs a link queue, checks remembered preferences, and terminates/restarts a real frozen HTTP download to verify continuation. Its temporary download history is isolated from the user's history. The **Build portable Windows release** workflow builds and checks the same artifacts on tagged versions or manual runs; it does not publish a release automatically.
 
 Keep `.venv/` and `.tools/` to avoid reinstalling source dependencies. Downloaded media, generated builds, caches, and package metadata are excluded from Git. Launchers and documented Python commands use `-B` to avoid source bytecode caches.
 
 ## License
 
-Project code uses the [MIT license](LICENSE). Dependencies retain their own licenses. The portable ZIP includes Python/library notices and unmodified certifi source. It excludes the optional Mutagen metadata editor and build-time PyInstaller Python modules. External FFmpeg and Deno binaries are downloaded directly from their publishers on first use instead of being redistributed inside the application ZIP. Their pinned release URLs, checksums, and notices are retained locally.
+Project code uses the [MIT license](LICENSE). Dependencies retain their own licenses. The portable ZIP includes Python/library notices, frontend dependency notices, WebView2 SDK notices, and unmodified certifi source. It excludes the optional Mutagen metadata editor and build-time PyInstaller Python modules. External FFmpeg and Deno binaries are downloaded directly from their publishers on first use instead of being redistributed inside the application ZIP. Their pinned release URLs, checksums, and notices are retained locally.

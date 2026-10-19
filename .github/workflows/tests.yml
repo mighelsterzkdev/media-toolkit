@@ -19,6 +19,10 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -B -m pip install -c constraints.txt -e .
+      - name: Install tested desktop dependencies
+        if: runner.os == 'Windows'
+        run: python -B -m pip install -c constraints.txt -e ".[desktop]"
+      - run: python -B -m pip check
       - run: python -B -m universal_downloader.compatibility
       - name: Install FFmpeg for integration tests
         if: runner.os == 'Linux'
@@ -27,3 +31,23 @@ jobs:
         if: runner.os == 'Windows'
         run: python -B scripts/install_tools.py
       - run: python -B -m unittest discover -s tests -v
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop-ui
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: desktop-ui/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: desktop-ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build
+      - name: Check committed desktop assets are reproducible
+        run: git diff --exit-code -- ../src/universal_downloader/desktop_assets

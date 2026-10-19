@@ -6,7 +6,7 @@ if not exist "%~dp0.venv\Scripts\python.exe" (
     exit /b 1
 )
 pushd "%~dp0"
-"%~dp0.venv\Scripts\python.exe" -B -m pip install --upgrade -c constraints.txt -e .
+"%~dp0.venv\Scripts\python.exe" -B -m pip install --upgrade -c constraints.txt -e ".[desktop]"
 set "result=%errorlevel%"
 if "%result%"=="0" (
     "%~dp0.venv\Scripts\python.exe" -B -m universal_downloader.compatibility

@@ -17,11 +17,11 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - run: python -B -m pip install -c constraints.txt -e . pyinstaller==6.22.3
+      - run: python -B -m pip install -c constraints.txt -e ".[desktop]" pyinstaller==6.22.3
       - run: python -B -m universal_downloader.compatibility
       - run: python -B scripts/install_tools.py
       - run: python -B -m unittest discover -s tests -v
-      - run: python -B scripts/build_windows.py
+      - run: python -B scripts/build_windows_gui.py
       - name: Check portable executable
         shell: pwsh
         run: |

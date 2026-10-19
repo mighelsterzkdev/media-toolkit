@@ -12,6 +12,11 @@ from pathlib import Path
 PROJECT_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[2]
 
 
+def hidden_process_options() -> dict:
+    """Keep background tool probes/conversions from opening console windows."""
+    return {"creationflags": subprocess.CREATE_NO_WINDOW} if platform.system() == "Windows" else {}
+
+
 def _executable(name: str) -> str:
     return f"{name}.exe" if platform.system() == "Windows" else name
 
@@ -46,6 +51,7 @@ def find_js_runtime() -> tuple[str, Path] | None:
         try:
             result = subprocess.run(
                 [str(executable), "--version"], capture_output=True, text=True, timeout=5,
+                **hidden_process_options(),
             )
             version = re.search(r"(\d+)\.(\d+)\.(\d+)", result.stdout)
             minimum = (2, 3, 0) if name == "deno" else (22, 0, 0)

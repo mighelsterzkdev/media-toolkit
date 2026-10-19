@@ -12,3 +12,14 @@ websockets==16.1.1; python_version < "3.11"
 websockets==17.2; python_version >= "3.11"
 yt-dlp==2026.8.19
 yt-dlp-ejs==0.8.0
+# Optional desktop bridge and its Windows runtime dependencies.
+pywebview==6.2.1
+pythonnet==3.0.5; sys_platform == "win32" and python_version < "3.11"
+pythonnet==3.2.1; sys_platform == "win32" and python_version >= "3.11"
+clr-loader==0.2.10; sys_platform == "win32" and python_version < "3.11"
+clr-loader==0.3.1; sys_platform == "win32" and python_version >= "3.11"
+cffi==2.1.1; sys_platform == "win32"
+pycparser==3.11; sys_platform == "win32"
+bottle==0.13.4
+proxy-tools==0.1.0
+typing-extensions==4.16.0

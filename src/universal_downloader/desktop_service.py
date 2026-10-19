@@ -1,0 +1,495 @@
+"""Desktop state and queue, independent of the browser and terminal interface."""
+
+from __future__ import annotations
+
+import base64
+from copy import deepcopy
+from dataclasses import replace
+from io import BytesIO
+import math
+from pathlib import Path
+import re
+import threading
+import time
+from uuid import uuid4
+
+from PIL import Image, ImageOps
+
+from . import __version__
+from .conversions import available_conversions
+from .dependencies import PROJECT_ROOT, find_ffmpeg, find_js_runtime
+from .desktop_worker import ProcessWorker
+from .errors import DownloadError
+from .limits import validate_inspected_limits, validate_limits
+from .preferences import load_preferences, save_preferences
+from .queue import MAX_BATCH_BYTES, MAX_QUEUE_URLS, MAX_URL_LENGTH, validated_urls
+from .resume import pending_resumes
+from .urls import validate_url
+
+TERMINAL = frozenset(("completed", "existing", "failed", "cancelled"))
+ACTIVE = frozenset(("checking", "downloading", "finalizing", "cancelling"))
+MAX_QUEUED_IMAGE_BYTES = 128 * 1024 * 1024
+_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_ERROR_URL = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+
+
+def _text(value, limit=500):
+    return "".join(character for character in _ANSI.sub("", str(value)) if ord(character) >= 32 and ord(character) != 127)[:limit]
+
+
+def safe_error(error):
+    if not isinstance(error, DownloadError):
+        return "This operation could not be completed. Try again."
+    message = _text(error, 2000)
+    replacements = (
+        ("Try again later, or use --type image to request only its thumbnail.", "Try again later or check a direct image link."),
+        ("Select one in the menu or with --item NUMBER.", "Use Check and choose the item to download."),
+        ("Select one with --item NUMBER.", "Use Check and choose the item to download."),
+        ("Run install.cmd on Windows, or install FFmpeg and add both programs to PATH.", "Install the media tools from this app."),
+        ("Run install.cmd.", "Install the media tools from this app."),
+        ("Use --reset-preferences or --no-preferences.", "Open Settings and save your preferences again."),
+        ("Downloads can continue with --no-preferences.", "You can continue downloading and try saving the settings again later."),
+        (" Use --verbose for details.", ""),
+        (" or use --verbose for technical details", ""),
+        ("Try updating yt-dlp.", "Update the app and check the link again."),
+        ("--max-height", "the maximum video height in Settings"),
+        ("--max-size", "the maximum file size in Settings"),
+    )
+    for original, translated in replacements:
+        message = message.replace(original, translated)
+    return _ERROR_URL.sub("the media link", message)[:1000]
+
+
+def _thumbnail(inspected):
+    if not inspected.image_data:
+        return None
+    try:
+        with Image.open(BytesIO(inspected.image_data)) as source:
+            if source.width * source.height > 40_000_000:
+                return None
+            source.seek(0)
+            with ImageOps.exif_transpose(source) as oriented:
+                image = oriented.convert("RGB")
+        try:
+            image.thumbnail((320, 200))
+            buffer = BytesIO()
+            image.save(buffer, "PNG", optimize=True)
+            data = buffer.getvalue()
+            if len(data) > 102_400:
+                image.thumbnail((224, 140))
+                buffer = BytesIO()
+                image.save(buffer, "PNG", optimize=True)
+                data = buffer.getvalue()
+            return "data:image/png;base64," + base64.b64encode(data).decode("ascii") if len(data) <= 102_400 else None
+        finally:
+            image.close()
+    except (OSError, ValueError, Image.DecompressionBombError):
+        return None
+
+
+def _height(settings, inspected, kind):
+    return None if kind == "audio" or (kind == "image" and not inspected.animated) else settings["max_height"]
+
+
+def _asset_description(inspected):
+    descriptions = []
+    if dimensions := inspected.image_dimensions:
+        descriptions.append(f"{dimensions[0]} × {dimensions[1]}")
+    elif inspected.heights:
+        descriptions.append(f"Up to {max(inspected.heights)}p")
+    duration = inspected.information.get("duration")
+    if isinstance(duration, (float, int)) and not isinstance(duration, bool) and math.isfinite(duration) and duration > 0:
+        seconds = int(duration)
+        descriptions.append(f"{seconds // 60}:{seconds % 60:02d}")
+    return " · ".join(descriptions) or ("Animation" if inspected.animated else "Verified media")
+
+
+def _asset_options(inspected, settings):
+    kinds = []
+    labels = {"mp3": "MP3 audio", "mp4": "MP4 video", "gif": "GIF animation", "png": "PNG image", "jpg": "JPEG image"}
+    for kind in inspected.kinds:
+        height = _height(settings, inspected, kind)
+        options = []
+        try:
+            validate_inspected_limits(inspected, kind, target=None, max_height=height, max_size=settings["max_size"])
+        except DownloadError:
+            pass
+        else:
+            extension = inspected.original_extension(kind)
+            options.append({"id": "original", "label": "Original", "description": f"Keep the source format{f' ({extension.upper()})' if extension else ''}.", "recommended": True})
+        for target in available_conversions(inspected, kind, max_height=height):
+            try:
+                validate_inspected_limits(inspected, kind, target=target, max_height=height, max_size=settings["max_size"])
+            except DownloadError:
+                continue
+            options.append({"id": target, "label": labels[target], "description": "Convert after downloading the original.", "recommended": False})
+        if options:
+            kinds.append({"id": kind, "label": inspected.labels[kind], "options": options})
+    return kinds
+
+
+class DesktopService:
+    """Own all transient URL metadata; the UI receives only a bounded view."""
+
+    def __init__(self, default_output: Path | None = None):
+        self._lock = threading.RLock()
+        self._wake = threading.Event()
+        self._closed = False
+        self._generation = 0
+        self._inspection_worker = None
+        self._download_worker = None
+        self._workers = set()
+        self._assets = {}
+        self._tasks = []
+        self._notice = None
+        try:
+            saved = load_preferences()
+        except DownloadError as error:
+            saved = {}
+            self._notice = safe_error(error)
+        self._settings = {"output": str(Path(saved.get("output") or default_output or PROJECT_ROOT / "downloads").expanduser().resolve()), "max_height": saved.get("max_height"), "max_size": saved.get("max_size")}
+        self._inspection = self._idle_inspection()
+        self._resume_time = 0
+        self._resume_count = 0
+        self._queue_thread = threading.Thread(target=self._run_queue, name="UniversalDownloader-queue", daemon=True)
+        self._queue_thread.start()
+
+    @staticmethod
+    def _idle_inspection():
+        return {"status": "idle", "id": None, "url": "", "error": None, "assets": []}
+
+    def _ensure_open(self):
+        if self._closed:
+            raise DownloadError("The application is closing.")
+
+    def get_state(self):
+        with self._lock:
+            if time.monotonic() - self._resume_time > 2:
+                try:
+                    self._resume_count = pending_resumes(self._settings["output"])
+                except (OSError, ValueError):
+                    self._resume_count = 0
+                self._resume_time = time.monotonic()
+            tasks = [{key: value for key, value in task.items() if not key.startswith("_")} for task in self._tasks]
+            return deepcopy({"version": __version__, "settings": self._settings, "inspection": self._inspection, "tasks": tasks, "notice": self._notice, "resume_count": self._resume_count})
+
+    def check_url(self, url):
+        if not isinstance(url, str) or len(url) > MAX_URL_LENGTH:
+            raise DownloadError("Paste a valid media URL of up to 16,384 characters.")
+        url = validate_url(url)
+        with self._lock:
+            self._ensure_open()
+            self._generation += 1
+            generation = self._generation
+            old = self._inspection_worker
+            self._assets = {}
+            self._inspection = {"status": "checking", "id": None, "url": url, "error": None, "assets": []}
+        if old:
+            old.close()
+        threading.Thread(target=self._inspect, args=(url, generation), name="UniversalDownloader-check", daemon=True).start()
+        return self.get_state()
+
+    def _create_worker(self, *, generation=None, task=None, attempt=None):
+        worker = ProcessWorker()
+        with self._lock:
+            if self._closed or (generation is not None and generation != self._generation) or (task is not None and (task["status"] == "cancelled" or task["_attempt"] != attempt)):
+                worker.close()
+                return None
+            self._workers.add(worker)
+            if generation is not None:
+                self._inspection_worker = worker
+            else:
+                self._download_worker = worker
+        return worker
+
+    def _forget_worker(self, worker):
+        if worker:
+            worker.close()
+            with self._lock:
+                self._workers.discard(worker)
+                if self._inspection_worker is worker:
+                    self._inspection_worker = None
+                if self._download_worker is worker:
+                    self._download_worker = None
+
+    def _inspect(self, url, generation):
+        worker = None
+        try:
+            worker = self._create_worker(generation=generation)
+            if worker is None:
+                return
+            worker.begin({"action": "inspect", "url": url})
+            result = None
+            for event, payload in worker.events():
+                if event == "inspection":
+                    result = payload
+                elif event == "error":
+                    raise DownloadError(payload["message"], code=payload["code"])
+            if result is None:
+                raise DownloadError("The media check stopped before returning a result. Try again.")
+            with self._lock:
+                if self._closed or generation != self._generation:
+                    return
+                inspection_id = uuid4().hex
+                assets, private = [], {}
+                for inspected in result.alternatives or (result,):
+                    inspected = replace(inspected, alternatives=())
+                    identifier = uuid4().hex
+                    kinds = _asset_options(inspected, self._settings)
+                    description = _asset_description(inspected) if kinds else "No available format fits the current limits. Change settings and check again."
+                    assets.append({"id": identifier, "title": _text(inspected.information.get("title") or "Download", 300), "description": description, "thumbnail": _thumbnail(inspected), "kinds": kinds, "default_kind": kinds[0]["id"] if kinds else None})
+                    private[identifier] = inspected
+                self._assets = private
+                self._inspection = {"status": "ready", "id": inspection_id, "url": url, "error": None, "assets": assets}
+        except BaseException as error:
+            with self._lock:
+                if not self._closed and generation == self._generation:
+                    self._inspection = {"status": "failed", "id": None, "url": url, "error": safe_error(error), "assets": []}
+        finally:
+            self._forget_worker(worker)
+
+    def cancel_check(self):
+        with self._lock:
+            self._generation += 1
+            worker = self._inspection_worker
+            self._inspection = self._idle_inspection()
+            self._assets = {}
+        if worker:
+            worker.close()
+        return self.get_state()
+
+    def _add_task(self, url, inspected=None, kind=None, output_format="original"):
+        settings = deepcopy(self._settings)
+        policy = "default" if kind is None or (inspected and kind == inspected.kinds[0]) else kind
+        identity = (url, policy, output_format, settings["output"], settings["max_height"], settings["max_size"])
+        for task in self._tasks:
+            if task["_identity"] == identity and task["status"] not in TERMINAL:
+                return task
+        if len(self._tasks) >= MAX_QUEUE_URLS:
+            raise DownloadError("The queue supports up to 1,000 items. Remove finished items first.")
+        if inspected and inspected.image_data:
+            buffers = {id(item["_inspected"].image_data): len(item["_inspected"].image_data)
+                       for item in self._tasks if item["_inspected"] is not None and item["_inspected"].image_data}
+            buffers[id(inspected.image_data)] = len(inspected.image_data)
+            if sum(buffers.values()) > MAX_QUEUED_IMAGE_BYTES:
+                raise DownloadError("The queue is holding too much image data. Wait for active downloads or clear finished items before adding more.")
+        task = {"id": uuid4().hex, "url": url, "title": _text(inspected.information.get("title") or "Download", 300) if inspected else url,
+                "kind": kind, "format": output_format, "status": "queued", "progress": None,
+                "downloaded_bytes": 0, "total_bytes": None, "speed": None, "eta": None, "path": None, "error": None,
+                "_identity": identity, "_settings": settings, "_inspected": inspected, "_attempt": None}
+        self._tasks.append(task)
+        return task
+
+    @staticmethod
+    def _compact_task(task):
+        inspected = task["_inspected"]
+        if task["status"] in TERMINAL and inspected and inspected.image_data:
+            # Cookies and extractor metadata permit an explicit retry. Most
+            # image bytes can be fetched again if the finished-file cache misses.
+            # Original animation-height validation still needs verified bytes.
+            preserve = inspected.animated and _height(task["_settings"], inspected, task["kind"]) is not None
+            if not preserve:
+                task["_inspected"] = replace(inspected, image_data=None)
+
+    def enqueue(self, inspection_id, asset_id, kind, output_format):
+        with self._lock:
+            self._ensure_open()
+            if self._inspection["status"] != "ready" or inspection_id != self._inspection["id"] or asset_id not in self._assets:
+                raise DownloadError("This media check is out of date. Check the URL again before downloading.")
+            asset = next(asset for asset in self._inspection["assets"] if asset["id"] == asset_id)
+            compatible = next((item for item in asset["kinds"] if item["id"] == kind), None)
+            if not compatible or output_format not in {option["id"] for option in compatible["options"]}:
+                raise DownloadError("Choose an available media type and format from this media check.")
+            inspected = self._assets[asset_id]
+            self._add_task(inspected.url, inspected, kind, output_format)
+            self._wake.set()
+        return self.get_state()
+
+    def enqueue_links(self, text):
+        if not isinstance(text, str) or len(text) > MAX_BATCH_BYTES or len(text.encode("utf-8")) > MAX_BATCH_BYTES:
+            raise DownloadError("Paste up to 1 MiB of URLs, one per line or separated by spaces.")
+        entries = [entry for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#") for entry in line.split()]
+        urls = validated_urls((f"item {index}", value) for index, value in enumerate(entries, 1))
+        with self._lock:
+            self._ensure_open()
+            if len(self._tasks) + len(urls) > MAX_QUEUE_URLS:
+                raise DownloadError("The queue supports up to 1,000 items. Remove finished items first.")
+            for url in urls:
+                self._add_task(url)
+            self._wake.set()
+        return self.get_state()
+
+    def _run_queue(self):
+        while True:
+            self._wake.wait(0.5)
+            self._wake.clear()
+            with self._lock:
+                if self._closed:
+                    return
+                task = next((item for item in self._tasks if item["status"] == "queued"), None)
+                if task:
+                    task["status"] = "checking" if task["_inspected"] is None else "downloading"
+                    task["_attempt"] = uuid4().hex
+                    attempt = task["_attempt"]
+            if task:
+                self._run_task(task, attempt)
+                self._wake.set()
+
+    def _run_task(self, task, attempt):
+        worker = None
+        result = None
+        try:
+            worker = self._create_worker(task=task, attempt=attempt)
+            if worker is None:
+                return
+            worker.begin({"action": "download", "url": task["url"], "inspected": task["_inspected"], "kind": task["kind"], "format": task["format"], "settings": task["_settings"]})
+            for event, payload in worker.events():
+                with self._lock:
+                    if task["_attempt"] != attempt or task["status"] in ("cancelled", "cancelling") or self._closed:
+                        break
+                    if event == "checked":
+                        task.update(title=_text(payload["title"], 300), kind=payload["kind"], status="downloading")
+                    elif event == "progress":
+                        status = payload["status"]
+                        if status in ("finished", "converting"):
+                            task.update(status="finalizing", progress=None, speed=None, eta=None)
+                        elif status in ("downloading", "resuming"):
+                            total = payload.get("total_bytes") or payload.get("total_bytes_estimate")
+                            received = payload.get("downloaded_bytes") or 0
+                            task.update(status="downloading", progress=min(99.9, received * 100 / total) if total else None,
+                                        downloaded_bytes=received, total_bytes=total, speed=payload.get("speed"), eta=payload.get("eta"))
+                    elif event == "result":
+                        result = payload
+                    elif event == "error":
+                        raise DownloadError(payload["message"], code=payload["code"])
+            with self._lock:
+                if task["_attempt"] != attempt:
+                    return
+                if task["status"] in ("cancelled", "cancelling") or self._closed:
+                    task["status"] = "cancelled"
+                elif result:
+                    path = Path(result["path"]).resolve()
+                    root = Path(task["_settings"]["output"]).resolve()
+                    if path.parent != root or not path.is_file():
+                        raise DownloadError("The media worker did not produce a completed output file.")
+                    task.update(status="existing" if result["already_exists"] else "completed", progress=100,
+                                path=str(path), title=_text(result["title"], 300), error=None, speed=None, eta=None)
+                else:
+                    raise DownloadError("The media worker stopped before completing the download. Retry to continue a supported partial download.")
+                self._compact_task(task)
+        except BaseException as error:
+            with self._lock:
+                if task["_attempt"] != attempt:
+                    return
+                if task["status"] in ("cancelled", "cancelling") or self._closed:
+                    task["status"] = "cancelled"
+                else:
+                    task.update(status="failed", error=safe_error(error), progress=None, speed=None, eta=None)
+                self._compact_task(task)
+        finally:
+            self._forget_worker(worker)
+            with self._lock:
+                self._resume_time = 0
+
+    def _find_task(self, identifier):
+        task = next((task for task in self._tasks if task["id"] == identifier), None)
+        if task is None:
+            raise DownloadError("This queue item no longer exists.")
+        return task
+
+    def cancel_task(self, task_id):
+        with self._lock:
+            self._ensure_open()
+            task = self._find_task(task_id)
+            worker = None
+            if task["status"] == "queued":
+                task["status"] = "cancelled"
+            elif task["status"] in ACTIVE:
+                task["status"] = "cancelling"
+                worker = self._download_worker
+            else:
+                return self.get_state()
+        if worker:
+            worker.close()
+        with self._lock:
+            task["_attempt"] = None
+            task.update(status="cancelled", speed=None, eta=None, error=None)
+            self._compact_task(task)
+            self._resume_time = 0
+            self._wake.set()
+        return self.get_state()
+
+    def retry_task(self, task_id):
+        with self._lock:
+            self._ensure_open()
+            task = self._find_task(task_id)
+            if task["status"] not in TERMINAL:
+                raise DownloadError("Wait for this item to stop before retrying it.")
+            for other in self._tasks:
+                if other is not task and other["_identity"] == task["_identity"] and other["status"] not in TERMINAL:
+                    raise DownloadError("This download is already in the queue.")
+            task.update(status="queued", progress=None, downloaded_bytes=0, total_bytes=None, speed=None, eta=None, path=None, error=None)
+            self._wake.set()
+        return self.get_state()
+
+    def remove_finished(self):
+        with self._lock:
+            self._tasks = [task for task in self._tasks if task["status"] not in TERMINAL]
+        return self.get_state()
+
+    def save_settings(self, settings):
+        if not isinstance(settings, dict) or set(settings) - {"output", "max_height", "max_size"}:
+            raise DownloadError("Invalid download settings.")
+        with self._lock:
+            self._ensure_open()
+            merged = {**self._settings, **settings}
+            output = merged["output"]
+            if not isinstance(output, str) or not output or len(output) > 8192 or any(ord(character) < 32 for character in output) or not Path(output).is_absolute():
+                raise DownloadError("Choose an absolute output folder path.")
+            validate_limits(merged["max_height"], merged["max_size"])
+            merged["output"] = str(Path(output).expanduser().resolve())
+            save_preferences(merged)
+            changed = any(merged[field] != self._settings[field] for field in ("max_height", "max_size"))
+            self._settings = merged
+            self._notice = None
+            self._resume_time = 0
+        if changed:
+            self.cancel_check()
+        return self.get_state()
+
+    def output_directory(self):
+        with self._lock:
+            return Path(self._settings["output"])
+
+    def completed_path(self, task_id):
+        with self._lock:
+            task = self._find_task(task_id)
+            if task["status"] not in ("completed", "existing") or not task["path"]:
+                raise DownloadError("This item has no completed file yet.")
+            path = Path(task["path"]).resolve()
+            if path.parent != Path(task["_settings"]["output"]).resolve() or not path.is_file():
+                raise DownloadError("The completed file could not be found.")
+            return path
+
+    def tool_status(self):
+        return {"ffmpeg": find_ffmpeg() is not None, "javascript": find_js_runtime() is not None}
+
+    def active_jobs(self):
+        with self._lock:
+            return self._inspection["status"] == "checking" or any(task["status"] not in TERMINAL for task in self._tasks)
+
+    def shutdown(self):
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._generation += 1
+            workers = list(self._workers)
+            self._assets = {}
+            for task in self._tasks:
+                if task["status"] not in TERMINAL:
+                    task["status"] = "cancelled"
+            self._wake.set()
+        for worker in workers:
+            worker.close()
+        self._queue_thread.join(timeout=3)

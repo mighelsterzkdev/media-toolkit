@@ -11,7 +11,7 @@ import tempfile
 
 from PIL import Image, ImageOps
 
-from .dependencies import find_ffmpeg
+from .dependencies import find_ffmpeg, hidden_process_options
 from .errors import DownloadError
 from .formats import CONVERSIONS
 from .images import check_image
@@ -100,7 +100,7 @@ def _probe(path: Path, executable: Path) -> dict:
     try:
         result = subprocess.run([
             str(executable), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path),
-        ], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, check=True)
+        ], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, check=True, **hidden_process_options())
         return json.loads(result.stdout)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         raise DownloadError("Could not read the downloaded media for conversion.") from error
@@ -187,7 +187,7 @@ def convert_file(source: Path, target: str, destination: Path, *, logger=None, m
                     result = subprocess.run([
                         str(ffmpeg), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(source),
                         *options, str(output),
-                    ], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800)
+                    ], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800, **hidden_process_options())
                     if result.returncode:
                         if logger:
                             logger.debug(result.stderr)
