@@ -93,10 +93,15 @@ def _height(settings, inspected, kind):
 
 def _asset_description(inspected):
     descriptions = []
-    if dimensions := inspected.image_dimensions:
+    if "video" in inspected.kinds or inspected.animation_video:
+        if inspected.heights:
+            descriptions.append(f"Up to {max(inspected.heights)}p")
+        else:
+            height = inspected.information.get("height")
+            if isinstance(height, (int, float)) and not isinstance(height, bool) and math.isfinite(height) and height > 0:
+                descriptions.append(f"{int(height)}p")
+    elif "audio" not in inspected.kinds and (dimensions := inspected.image_dimensions):
         descriptions.append(f"{dimensions[0]} × {dimensions[1]}")
-    elif inspected.heights:
-        descriptions.append(f"Up to {max(inspected.heights)}p")
     duration = inspected.information.get("duration")
     if isinstance(duration, (float, int)) and not isinstance(duration, bool) and math.isfinite(duration) and duration > 0:
         seconds = int(duration)

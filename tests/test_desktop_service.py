@@ -16,9 +16,21 @@ from unittest.mock import patch
 from PIL import Image
 
 from universal_downloader.dependencies import find_ffmpeg
-from universal_downloader.desktop_service import DesktopService, _thumbnail, safe_error
+from universal_downloader.desktop_service import DesktopService, _asset_description, _thumbnail, safe_error
 from universal_downloader.errors import DownloadError
 from universal_downloader.inspection import MediaInspection
+
+
+class DesktopDescriptionTests(unittest.TestCase):
+    def test_media_resolution_never_uses_its_cover_image_dimensions(self):
+        preview = BytesIO()
+        Image.new("RGB", (640, 360)).save(preview, "PNG")
+        video = MediaInspection("https://example.com/video", {"duration": 5}, ("video", "audio", "image"), heights=(180,), image_data=preview.getvalue())
+        audio = MediaInspection("https://example.com/audio", {"duration": 5}, ("audio", "image"), image_data=preview.getvalue())
+        image = MediaInspection("https://example.com/image", {}, ("image",), image_data=preview.getvalue())
+        self.assertEqual(_asset_description(video), "Up to 180p · 0:05")
+        self.assertEqual(_asset_description(audio), "0:05")
+        self.assertEqual(_asset_description(image), "640 × 360")
 
 
 class _Handler(BaseHTTPRequestHandler):
