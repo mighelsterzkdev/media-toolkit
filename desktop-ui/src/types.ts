@@ -5,14 +5,23 @@ export interface MediaAsset { id: string; title: string; description: string; th
 export interface Inspection {
   status: 'idle' | 'checking' | 'ready' | 'failed'; id: string | null; url: string; error: string | null; assets: MediaAsset[]
 }
-export type TaskStatus = 'queued' | 'checking' | 'downloading' | 'finalizing' | 'completed' | 'existing' | 'failed' | 'cancelled' | 'cancelling'
+export type ImageFormat = 'png' | 'jpg' | 'webp'
+export interface LocalImage {
+  id: string; name: string; format: string | null; width: number | null; height: number | null;
+  size: number | null; transparent: boolean; targets: ImageFormat[]; error: string | null
+}
+export interface Conversion {
+  status: 'idle' | 'checking' | 'ready' | 'failed'; id: string | null; files: LocalImage[]; error: string | null
+}
+export type TaskStatus = 'queued' | 'checking' | 'downloading' | 'converting' | 'finalizing' | 'completed' | 'existing' | 'failed' | 'cancelled' | 'cancelling'
 export interface DownloadTask {
   id: string; url: string; title: string; kind: string | null; format: string; status: TaskStatus;
   progress: number | null; downloaded_bytes: number; total_bytes: number | null; speed: number | null;
-  eta: number | null; path: string | null; error: string | null
+  eta: number | null; path: string | null; error: string | null;
+  action?: 'download' | 'convert'; source_format?: string | null; can_convert?: boolean
 }
 export interface DesktopState {
-  version: string; settings: Settings; inspection: Inspection; tasks: DownloadTask[]; notice: string | null;
+  version: string; settings: Settings; inspection: Inspection; conversion: Conversion; tasks: DownloadTask[]; notice: string | null;
   resume_count: number; tools: { status: 'ready' | 'missing' | 'installing' | 'failed'; message?: string; error?: string | null; ffmpeg?: boolean; javascript?: boolean }
 }
 export type ApiResult = { ok: true; state: DesktopState } | { ok: false; error: string }
@@ -30,10 +39,16 @@ export interface DesktopApi {
   open_folder(taskId?: string | null): Promise<ApiResult>;
   clear_resume(): Promise<ApiResult>;
   install_tools(): Promise<ApiResult>;
+  select_conversion_files(): Promise<ApiResult>;
+  remove_conversion_file(id: string): Promise<ApiResult>;
+  clear_conversion_files(): Promise<ApiResult>;
+  enqueue_conversions(ids: string[], target: ImageFormat, background: '#FFFFFF' | '#000000'): Promise<ApiResult>;
+  prepare_conversion(taskId: string): Promise<ApiResult>;
 }
 declare global { interface Window { pywebview?: { api: DesktopApi } } }
 export const initialState: DesktopState = {
   version: '', settings: { output: '', max_height: null, max_size: null },
   inspection: { status: 'idle', id: '', url: '', error: null, assets: [] }, tasks: [], notice: null,
+  conversion: { status: 'idle', id: null, files: [], error: null },
   resume_count: 0, tools: { status: 'ready', message: '' },
 }

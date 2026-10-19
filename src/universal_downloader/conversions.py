@@ -106,6 +106,32 @@ def _probe(path: Path, executable: Path) -> dict:
         raise DownloadError("Could not read the downloaded media for conversion.") from error
 
 
+def _image_has_transparency(image: Image.Image) -> bool:
+    if "A" in image.getbands():
+        with image.getchannel("A") as alpha:
+            return alpha.getextrema()[0] < 255
+    if "transparency" in image.info:
+        with image.convert("RGBA") as rgba, rgba.getchannel("A") as alpha:
+            return alpha.getextrema()[0] < 255
+    return False
+
+
+def _encode_static_image(image: Image.Image, target: str, output, *, background="#FFFFFF") -> None:
+    """One encoder for checked, oriented downloads and local still images."""
+    if target == "jpg":
+        with image.convert("RGBA") as rgba, Image.new("RGB", rgba.size, background) as flattened, rgba.getchannel("A") as alpha:
+            flattened.paste(rgba, mask=alpha)
+            flattened.save(output, "JPEG", quality=90, optimize=True)
+    elif target in ("png", "webp"):
+        with image.convert("RGBA" if _image_has_transparency(image) else "RGB") as converted:
+            if target == "webp":
+                converted.save(output, "WEBP", lossless=True, exact=True)
+            else:
+                converted.save(output, "PNG", optimize=True)
+    else:
+        raise DownloadError("Unsupported still-image conversion target.")
+
+
 def _convert_image(source: Path, target: str, output: Path) -> None:
     extension, animated = check_image(source.read_bytes())
     if animated:
@@ -114,16 +140,7 @@ def _convert_image(source: Path, target: str, output: Path) -> None:
         shutil.copyfile(source, output)
         return
     with Image.open(source) as opened, ImageOps.exif_transpose(opened) as oriented:
-        image = oriented.convert("RGBA")
-    try:
-        if target == "jpg":
-            with Image.new("RGB", image.size, "white") as flattened:
-                flattened.paste(image, mask=image.getchannel("A"))
-                flattened.save(output, "JPEG", quality=90, optimize=True)
-        else:
-            image.save(output, "PNG", optimize=True)
-    finally:
-        image.close()
+        _encode_static_image(oriented, target, output)
 
 
 def _fits_height(source: Path, max_height: int | None) -> bool:

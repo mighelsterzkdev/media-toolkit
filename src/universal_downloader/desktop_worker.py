@@ -24,6 +24,20 @@ def _number(value):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else None
 
 
+def _can_convert(path):
+    from .local_conversion import inspect_local_files
+
+    if Path(path).suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+        return False
+    try:
+        inspected = inspect_local_files([path])
+        return len(inspected) == 1 and not inspected[0].get("error")
+    except (DownloadError, OSError, ValueError, TypeError, RuntimeError, MemoryError):
+        # A completed download remains successful even if it is not eligible
+        # for the optional static-image conversion shortcut.
+        return False
+
+
 def _worker_main(connection):
     """Wait for the parent's containment gate before touching any media URL."""
     try:
@@ -35,6 +49,21 @@ def _worker_main(connection):
             result = inspect_media(payload["url"], logger=_QuietLogger())
             connection.send(("inspection", result))
             return
+        if payload["action"] == "inspect_local":
+            from .local_conversion import inspect_local_files
+
+            connection.send(("local_inspection", inspect_local_files(payload["paths"])))
+            return
+        if payload["action"] == "convert":
+            from .local_conversion import convert_local_image
+
+            connection.send(("progress", {"status": "converting"}))
+            path = convert_local_image(payload["image"], payload["format"], Path(payload["settings"]["output"]),
+                                       background=payload["background"], work_dir=Path(payload["work_dir"]))
+            connection.send(("result", {"title": payload["image"]["name"], "path": str(path), "already_exists": False, "can_convert": True}))
+            return
+        if payload["action"] != "download":
+            raise DownloadError("This media operation is not supported.")
         inspected = payload.get("inspected")
         kind = payload.get("kind")
         if inspected is None:
@@ -66,7 +95,8 @@ def _worker_main(connection):
             }))
 
         result = download(request, inspected=inspected, logger=_QuietLogger(), progress_hook=progress)
-        connection.send(("result", {"title": result.title, "path": str(result.path), "already_exists": result.already_exists}))
+        connection.send(("result", {"title": result.title, "path": str(result.path), "already_exists": result.already_exists,
+                                    "can_convert": _can_convert(result.path)}))
     except DownloadError as error:
         try:
             connection.send(("error", {"message": str(error), "code": error.code}))
@@ -172,7 +202,7 @@ class ProcessWorker:
                 if self.connection.poll(0.10):
                     event = self.connection.recv()
                     yield event
-                    if event[0] in ("inspection", "result", "error"):
+                    if event[0] in ("inspection", "local_inspection", "result", "error"):
                         return
                 elif not self.process.is_alive():
                     # Drain the final message, including a large inspection,

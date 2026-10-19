@@ -75,6 +75,55 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertTrue(self.api.browse_folder()["ok"])
         self.service.save_settings.assert_called_once_with({"output": str(Path.cwd().resolve())})
 
+    def test_image_picker_uses_native_multiple_selection_and_cancellation_keeps_state(self):
+        self.api._window = Mock()
+        self.api._webview = Mock()
+        self.service.output_directory.return_value = Path.cwd()
+        selected = [str(Path.cwd() / "one.png"), str(Path.cwd() / "two.webp")]
+        self.api._window.create_file_dialog.return_value = tuple(selected)
+        response = self.api.select_conversion_files()
+        self.assertTrue(response["ok"])
+        self.service.add_conversion_files.assert_called_once_with(selected)
+        options = self.api._window.create_file_dialog.call_args.kwargs
+        self.assertTrue(options["allow_multiple"])
+        self.assertIn("All files (*.*)", options["file_types"])
+        self.api._window.create_file_dialog.return_value = None
+        self.assertTrue(self.api.select_conversion_files()["ok"])
+        self.service.add_conversion_files.assert_called_once()
+
+    def test_conversion_shortcut_uses_only_a_recorded_completed_file(self):
+        source = Path.cwd() / "completed.png"
+        self.service.completed_path.return_value = source
+        self.assertTrue(self.api.prepare_conversion("completed-id")["ok"])
+        self.service.completed_path.assert_called_once_with("completed-id")
+        self.service.clear_conversion_files.assert_called_once_with()
+        self.service.add_conversion_files.assert_called_once_with([str(source)])
+        self.service.completed_path.side_effect = DownloadError("This queue item no longer exists.")
+        self.assertFalse(self.api.prepare_conversion("C:/private/image.png")["ok"])
+        self.service.add_conversion_files.assert_called_once()
+
+    def test_local_conversion_and_retry_do_not_require_download_tools(self):
+        self.api._tools["status"] = "missing"
+        self.assertTrue(self.api.enqueue_conversions(["file-id"], "jpg", "#000000")["ok"])
+        self.service.enqueue_conversions.assert_called_once_with(["file-id"], "jpg", "#000000")
+        self.service.get_state.return_value["tasks"] = [{"id": "conversion", "action": "convert"}]
+        self.assertTrue(self.api.retry_task("conversion")["ok"])
+        self.service.retry_task.assert_called_once_with("conversion")
+        self.assertFalse(self.api.retry_task("download")["ok"])
+        self.service.retry_task.assert_called_once()
+
+    def test_conversion_selection_actions_use_the_response_envelope(self):
+        self.assertTrue(self.api.remove_conversion_file("file-id")["ok"])
+        self.service.remove_conversion_file.assert_called_once_with("file-id")
+        self.assertTrue(self.api.clear_conversion_files()["ok"])
+        self.service.clear_conversion_files.assert_called_once_with()
+
+    def test_retry_state_failure_is_sanitized(self):
+        self.service.get_state.side_effect = RuntimeError("private source path and credential=secret")
+        response = self.api.retry_task("task")
+        self.assertFalse(response["ok"])
+        self.assertNotIn("secret", response["error"])
+
     def test_tool_setup_is_asynchronous_and_duplicate_requests_do_not_spawn_installers(self):
         entered, finish = threading.Event(), threading.Event()
         def install(**kwargs):
@@ -125,7 +174,7 @@ class DesktopBridgeTests(unittest.TestCase):
                 with self.subTest(status=status, method=method):
                     response = getattr(self.api, method)(*args)
                     self.assertFalse(response["ok"])
-                    self.assertIn("Prepare tools", response["error"])
+                    self.assertIn("Install tools", response["error"])
                     getattr(self.service, method).assert_not_called()
 
 

@@ -30,12 +30,14 @@
   .app-shell { @apply flex h-dvh w-full min-w-0 flex-col overflow-hidden; }
   .app-header { @apply flex min-h-16 shrink-0 items-center justify-between gap-4 border-b px-6 py-3; }
   .app-header h1 { @apply text-xl font-semibold tracking-tight; }
+  .app-header-main { @apply flex min-w-0 flex-wrap items-center gap-x-6 gap-y-3; }
+  .tool-panel { @apply min-w-0 shrink-0; }
   .app-notices { @apply max-h-[30%] shrink-0 overflow-y-auto px-6 pt-4; }
   .app-content { @apply flex min-h-0 flex-1 flex-col overflow-y-auto; }
   .notice { @apply mb-4 flex items-center gap-4 rounded-md border bg-muted/30 p-4 text-sm leading-6 text-foreground; }
   .notice > span { @apply min-w-0 flex-1; }
   .notice-error { @apply border-destructive/50 text-red-300; }
-  .download-card { @apply min-w-0 shrink-0 px-6 pt-4; }
+  .download-card, .convert-card { @apply min-w-0 shrink-0 px-6 pt-4; }
   .section-heading { @apply flex min-h-10 items-center justify-between gap-4; }
   .section-heading h2 { @apply text-base font-semibold; }
   .new-download-heading { @apply mb-2; }
@@ -96,6 +98,7 @@
   .task-content [role='progressbar'] { @apply mt-2 h-1 bg-secondary; }
   .task-content [role='progressbar'] > div { @apply bg-primary; }
   .task-error { @apply mt-2 break-words text-sm leading-6 text-red-300; }
+  .task-operation { @apply mt-1 text-sm leading-6 text-muted-foreground; }
   .task-actions { @apply flex shrink-0 items-center; }
   .task-actions button { @apply size-10 text-muted-foreground; }
   .task-actions button svg { @apply size-4; }
@@ -118,6 +121,24 @@
   .asset-option > span { @apply min-w-0; }
   .asset-option strong { @apply block truncate text-base font-medium; }
   .asset-option small { @apply block text-sm font-normal text-muted-foreground; }
+  .conversion-empty { @apply flex min-h-32 items-center gap-4 py-6 text-muted-foreground; }
+  .conversion-empty p { @apply text-base text-foreground; }
+  .conversion-empty span { @apply text-sm; }
+  .conversion-selection { @apply mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm text-muted-foreground; }
+  .conversion-selection > div { @apply flex items-center; }
+  .conversion-files { @apply mb-4 max-h-64 overflow-y-auto rounded-md border; scrollbar-gutter: stable; }
+  .conversion-file { @apply flex min-h-20 items-center gap-3 border-b px-4 py-3 last:border-b-0; }
+  .conversion-file > button { @apply shrink-0 text-muted-foreground; }
+  .conversion-file-copy { @apply min-w-0 flex-1; }
+  .conversion-file-copy > p { @apply truncate text-base font-medium; }
+  .conversion-file-copy > span { @apply block text-sm leading-6 text-muted-foreground; }
+  .conversion-file-copy > .inline-error { @apply text-red-300; }
+  .file-checkbox { @apply size-4 shrink-0 cursor-pointer rounded disabled:cursor-not-allowed disabled:opacity-50; accent-color: hsl(var(--primary)); }
+  .conversion-options { @apply space-y-3 pb-4; }
+  .conversion-options > .kind-options { @apply mb-0; }
+  .alpha-background { @apply flex flex-wrap items-center gap-x-6 gap-y-2; }
+  .alpha-background > p { @apply basis-full text-sm leading-6 text-muted-foreground; }
+  .background-choice { @apply flex min-h-6 cursor-pointer items-center gap-2; }
 }
 
 .progress-indeterminate > div { transform: none !important; width: 30%; animation: progress-slide 1.5s ease-in-out infinite; }
@@ -127,7 +148,7 @@
   .format-options { gap: 16px 24px; }
 }
 @media (max-width: 560px) {
-  .app-header, .app-notices, .download-card, .downloads-section, .app-footer { padding-left: 16px; padding-right: 16px; }
+  .app-header, .app-notices, .download-card, .convert-card, .downloads-section, .app-footer { padding-left: 16px; padding-right: 16px; }
   .new-download-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
   .new-download-heading > button { margin-left: -12px; }
   .download-footer { flex-wrap: wrap; }
@@ -136,6 +157,8 @@
   .task-eta { margin-left: 0; }
   .task-row { gap: 8px; padding: 16px 8px; }
   .settings-limits { grid-template-columns: 1fr; }
+  .app-header-main { column-gap: 16px; }
+  .conversion-file { padding-left: 12px; padding-right: 8px; gap: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }

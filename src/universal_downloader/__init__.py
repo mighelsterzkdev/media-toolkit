@@ -1,3 +1,4 @@
-"""Universal Downloader: a simple interface for yt-dlp."""
+"""Media Toolkit: original media downloads and local file conversion."""
 
-__version__ = "0.7.1"
+APP_NAME = "Media Toolkit"
+__version__ = "0.8.0"

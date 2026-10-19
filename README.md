@@ -1,12 +1,12 @@
-# Universal Downloader
+# Media Toolkit
 
-A desktop app and terminal tool for saving video, audio, images, and animations from a URL. Check the link first, choose the original or an available conversion, then download.
+A desktop app with two tools: **Download** saves original media from a URL; **Convert** turns local static PNG, JPG and WebP images into another compatible format. Both tools share one queue. The original terminal downloader remains available.
 
 **Desktop: Windows 10/11 · React / shadcn/ui / pywebview**
 **Download engine and terminal: Python · yt-dlp · FFmpeg · Pillow · Windows / Linux / macOS**
 
 ```text
-UNIVERSAL DOWNLOADER
+MEDIA TOOLKIT
 Check a link, then choose the original or another format.
 
 Paste the URL (Enter to exit): https://example.com/animation
@@ -29,30 +29,42 @@ Saved:
 
 Open **start.cmd** for the dark desktop interface. It uses bundled React and shadcn/ui components inside Microsoft Edge WebView2; it does not need Node.js or an external website at runtime.
 
-1. Paste a URL and click **Check**. Inspection can be cancelled.
+1. In **Download**, paste a URL and click **Check**. Inspection can be cancelled.
 2. Select a verified media item, choose **Original — Recommended** or an available conversion, and click **Download**.
 3. Follow progress in the queue. Cancel a running/queued item, retry a failed or cancelled item, or open a completed item's folder.
 4. Use **Add multiple links** for several URLs. This explicitly queues each link's recommended original; ambiguous pages report that they need individual selection.
 5. Use **Browse** to select the download folder and **Settings** for optional limits. These use the same remembered preferences as the terminal.
 
-Checks and downloads run in separate worker processes. Cancelling or closing stops the worker and its child tools without freezing the window. Supported interrupted transfers can be retried later. The queue itself is session-only; URLs and media choices are not saved between launches. Existing verified media and interrupted work still use the shared download engine's local history.
+Checks, downloads and image conversions run in contained worker processes. Cancelling or closing stops the worker and its child tools without freezing the window. Supported interrupted transfers can be retried later. The queue itself is session-only; URLs and media choices are not saved between launches. Existing verified media and interrupted work still use the shared download engine's local history.
 
 The desktop app is tested on Windows x64 and requires the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), normally available on Windows 11. The app uses its own private renderer profile under local application data and does not access your signed-in browser. It loads only the packaged interface and does not open downloaded web pages inside the privileged window.
 
-**start-cli.cmd** opens the original terminal menu. **start.cmd** with arguments still forwards them to the terminal, so existing scripts continue to work. The installed commands are `unidown-gui` for the desktop and `unidown` for the terminal.
+**start-cli.cmd** opens the original terminal menu. **start.cmd** with arguments still forwards them to the terminal, so existing scripts continue to work. The installed commands are `media-toolkit` for the desktop and `unidown` for the terminal. `unidown-gui` remains a compatible desktop alias.
+
+## Convert local images
+
+Open **Convert** and click **Add files** to choose up to 100 local PNG, JPEG or WebP images. The app verifies their actual contents before showing compatible output formats. Select files, choose **PNG**, **JPG** or **WebP**, select the destination, then click **Convert**. Completed image downloads also have a **Convert file** shortcut.
+
+- Conversion runs locally and works without FFmpeg, Deno or internet access.
+- Original files remain intact. Existing destination files are preserved and repeated names receive a numeric suffix.
+- PNG and WebP preserve transparency. WebP output is lossless. JPG uses quality 90 and an explicit white or black background when flattening transparency.
+- EXIF orientation is applied. Animated and multipage images are rejected rather than reduced silently to one frame.
+- Each input is limited to 128 MiB and 40 million pixels. Unreadable files have individual errors, so valid files can still be selected.
+- A file changed after inspection must be added again. Queued tasks keep their own source, target, background and destination snapshots.
+- The shared queue supports cancellation, retry and opening completed output folders. Switching tabs preserves selections and running operations.
 
 ## Windows portable release
 
-1. Download the Windows x64 ZIP and `SHA256SUMS.txt` from [GitHub Releases](https://github.com/mighelsterzkdev/universal-downloader/releases).
-2. Extract the complete ZIP into a writable folder. Keep `_internal` and `_desktop` beside `unidown.exe` and `unidown-gui.exe`.
+1. Download the Windows x64 ZIP and `SHA256SUMS.txt` from [GitHub Releases](https://github.com/mighelsterzkdev/media-toolkit/releases).
+2. Extract the complete ZIP into a writable folder. Keep `_internal` and `_desktop` beside `unidown.exe` and `media-toolkit.exe`.
 3. Open **start.cmd**. Python and administrator access are not required.
-4. If download tools are missing, click **Install tools**. The app downloads pinned FFmpeg/ffprobe and Deno archives directly from their publishers, verifies SHA-256 checksums, and stores them in `.tools` beside the app. Setup reports progress, retries temporary server failures, and explains download, permission, or integrity failures. The terminal prepares missing tools before its first media command.
+4. Image conversion is ready offline. If download tools are missing, click **Install tools**. The app downloads pinned FFmpeg/ffprobe and Deno archives directly from their publishers, verifies SHA-256 checksums, and stores them in `.tools` beside the app. Setup reports progress, retries temporary server failures, and explains download, permission, or integrity failures. The terminal prepares missing tools before its first media command.
 
 Downloads go into the extracted folder's `downloads` directory when launched through `start.cmd`. From another terminal directory, either use `--output` or open `start.cmd` to keep that location predictable.
 
 ```powershell
 # Check the ZIP against the published checksum before extraction
-Get-FileHash .\universal-downloader-0.7.1-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\media-toolkit-0.8.0-windows-x64.zip -Algorithm SHA256
 
 # Prepare the external tools without opening the menu
 .\unidown.exe --install-tools
@@ -192,7 +204,7 @@ Explicit `--output`, `--max-height`, and `--max-size` values are remembered for 
 .\start.cmd "https://example.com/image.gif" --no-preferences
 ```
 
-Settings live in `preferences.json` inside the app's local state directory, alongside the download history. Only output folder and limits are saved. URLs, cookies, credentials, media types, and conversion choices are not stored as preferences. Choosing a format in one interactive download does not silently convert the next one.
+Settings live in `preferences.json` inside the app's local state directory, alongside the download history. Existing installations retain their legacy `UniversalDownloader` / `universal-downloader` state directories so the new app name keeps their saved preferences and verified history. Only output folder and limits are saved. URLs, cookies, credentials, media types, and conversion choices are not stored as preferences. Choosing a format in one interactive download does not silently convert the next one.
 
 ## Existing files and download history
 
@@ -250,8 +262,9 @@ Run on Windows x64 using a separate build environment:
 ```powershell
 python -B -m venv .tools/build-env
 .\.tools\build-env\Scripts\python.exe -B -m pip install -c constraints.txt -e . pyinstaller==6.22.3
-.\.tools\build-env\Scripts\python.exe -B scripts/build_windows_gui.py --output dist/release-0.7.1
-.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/release-0.7.1/universal-downloader-0.7.1-windows-x64/unidown.exe --bootstrap
+.\.tools\build-env\Scripts\python.exe -B scripts/build_windows_gui.py --output dist/release-0.8.0
+.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/release-0.8.0/media-toolkit-0.8.0-windows-x64/unidown.exe --bootstrap
+.\.tools\build-env\Scripts\python.exe -B scripts/verify_desktop.py dist/release-0.8.0/media-toolkit-0.8.0-windows-x64/media-toolkit.exe
 ```
 
 Use a new output directory for each build. The desktop build produces both executables, their separate library folders, a complete ZIP, and `SHA256SUMS.txt`. `scripts/build_windows.py` remains available for a terminal-only ZIP. The committed frontend assets and notices are included without installing Node.js on the build machine. It checks the executable archive to exclude optional Mutagen and build-time PyInstaller modules. The verifier removes Python and external tools from PATH, checks the bundled executable, preserves local image/video originals, converts GIF animation to H.264 MP4, extracts original AAC audio, converts MP3, verifies cached reuse, runs a link queue, checks remembered preferences, and terminates/restarts a real frozen HTTP download to verify continuation. Its temporary download history is isolated from the user's history. The **Build portable Windows release** workflow builds and checks the same artifacts on tagged versions or manual runs; it does not publish a release automatically.

@@ -78,7 +78,7 @@ def build(output: Path) -> Path:
         working = Path(temporary)
         command = [
             sys.executable, "-B", "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--windowed",
-            "--name", "unidown-gui", "--contents-directory", "_desktop",
+            "--name", "media-toolkit", "--contents-directory", "_desktop",
             "--manifest", str(ROOT / "scripts/windows_gui.manifest"),
             "--distpath", str(working / "dist"), "--workpath", str(working / "work"), "--specpath", str(working),
             "--paths", str(ROOT), "--collect-all", "yt_dlp", "--collect-all", "yt_dlp_ejs", "--collect-all", "PIL",
@@ -92,7 +92,7 @@ def build(output: Path) -> Path:
             command += ["--copy-metadata", package]
         command.append(str(ROOT / "scripts/gui_entry.py"))
         subprocess.run(command, cwd=ROOT, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"), check=True)
-        executable = working / "dist/unidown-gui/unidown-gui.exe"
+        executable = working / "dist/media-toolkit/media-toolkit.exe"
         build_windows.verify_exclusions(executable)
         verify_gui_manifest(executable)
         shutil.copyfile(executable, bundle / executable.name)
@@ -101,24 +101,26 @@ def build(output: Path) -> Path:
     shutil.copyfile(bundle / "start.cmd", bundle / "start-cli.cmd")
     (bundle / "start.cmd").write_text(
         '@echo off\nsetlocal\ncd /d "%~dp0"\n'
-        'if "%~1"=="" (\n    start "" "%~dp0unidown-gui.exe"\n    exit /b 0\n)\n'
+        'if "%~1"=="" (\n    start "" "%~dp0media-toolkit.exe"\n    exit /b 0\n)\n'
         '"%~dp0unidown.exe" %*\nexit /b %errorlevel%\n', encoding="utf-8",
     )
     (bundle / "READ-ME.txt").write_text(
-        f"Universal Downloader {__version__} — Windows x64\n\n"
+        f"Media Toolkit {__version__} — Windows x64\n\n"
         "Extract the complete ZIP into a writable folder. Keep _desktop and _internal beside both EXEs.\n"
-        "Open start.cmd or unidown-gui.exe for the desktop app. No Python or Node.js is required.\n"
+        "Open start.cmd or media-toolkit.exe for the desktop app. No Python or Node.js is required.\n"
         "The desktop app uses the installed Microsoft Edge WebView2 Runtime (normally present on Windows 11).\n"
         "Runtime installer if needed: https://developer.microsoft.com/microsoft-edge/webview2/\n"
-        "Paste a link, click Check, select an available output, then click Download.\n"
+        "Download tab: paste a link, click Check, choose an output, then click Download.\n"
+        "Convert tab: add local PNG, JPEG or WebP files, choose a compatible format, then click Convert.\n"
+        "Image conversion works offline without the optional download tools and preserves the source files.\n"
         "Use the queue for several links. Nothing starts until you explicitly add downloads.\n"
-        "If tools are missing, click Prepare tools to download checksum-pinned FFmpeg/Deno archives from their publishers.\n"
+        "For downloads, click Install tools if needed to prepare checksum-pinned FFmpeg/Deno archives from their publishers.\n"
         "Downloads default to downloads/ beside this program. Settings persist in local application data.\n\n"
         "Open start-cli.cmd or run unidown.exe --help for the terminal interface.\n"
         "CLI examples: unidown.exe --doctor | unidown.exe --batch links.txt | unidown.exe --version\n"
         "Prepare tools from a terminal: unidown.exe --install-tools\n"
         "To update, extract a newer complete release. Do not replace only an EXE.\n"
-        "Source and instructions: https://github.com/mighelsterzkdev/universal-downloader\n"
+        "Source and instructions: https://github.com/mighelsterzkdev/media-toolkit\n"
         "Third-party notices are in licenses/. This release is unsigned; verify SHA256SUMS.txt.\n",
         encoding="utf-8",
     )

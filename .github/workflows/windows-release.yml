@@ -29,6 +29,13 @@ jobs:
           $executable = Join-Path $bundle.FullName 'unidown.exe'
           python -B scripts/verify_portable.py $executable --bootstrap
           exit $LASTEXITCODE
+      - name: Check desktop image workers
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem -LiteralPath dist -Directory | Select-Object -First 1
+          $executable = Join-Path $bundle.FullName 'media-toolkit.exe'
+          python -B scripts/verify_desktop.py $executable
+          exit $LASTEXITCODE
       - uses: actions/upload-artifact@v7
         with:
           name: portable-windows-release

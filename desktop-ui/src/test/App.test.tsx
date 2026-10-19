@@ -2,18 +2,18 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import App from '../App'
-import { initialState, type DesktopApi, type DesktopState } from '../types'
+import { initialState, type DesktopApi, type DesktopState, type LocalImage } from '../types'
 
 const url = 'https://example.com/media'
 function fixture() {
   let state: DesktopState = structuredClone(initialState)
-  state.version = '0.7.0'
+  state.version = '0.8.0'
   state.settings.output = 'C:\\Downloads'
   const success = () => Promise.resolve({ ok: true as const, state: structuredClone(state) })
   const api: DesktopApi = {
     get_state: vi.fn(success),
     check_url: vi.fn(async checked => {
-      state.inspection = { status: 'ready', id: 'inspection-1', url: checked, error: null, assets: [{ id: 'asset-1', title: 'A real checked title', description: '1920 Ãƒâ€” 1080', thumbnail: null, default_kind: 'video', kinds: [
+      state.inspection = { status: 'ready', id: 'inspection-1', url: checked, error: null, assets: [{ id: 'asset-1', title: 'A real checked title', description: '1920 × 1080', thumbnail: null, default_kind: 'video', kinds: [
         { id: 'video', label: 'Video', options: [{ id: 'original', label: 'Original', description: 'Best available quality', recommended: true }, { id: 'mp4', label: 'MP4', description: 'Convert to MP4', recommended: false }] },
         { id: 'audio', label: 'Audio', options: [{ id: 'original', label: 'Original', description: 'Original audio', recommended: true }, { id: 'mp3', label: 'MP3', description: 'Convert to MP3', recommended: false }] },
       ] }] }
@@ -21,9 +21,14 @@ function fixture() {
     }),
     cancel_check: vi.fn(success), enqueue: vi.fn(success), enqueue_links: vi.fn(success), cancel_task: vi.fn(success), retry_task: vi.fn(success), remove_finished: vi.fn(success),
     save_settings: vi.fn(async settings => { state.settings = settings; return success() }), browse_folder: vi.fn(success), open_folder: vi.fn(success), clear_resume: vi.fn(success), install_tools: vi.fn(success),
+    select_conversion_files: vi.fn(success), remove_conversion_file: vi.fn(success), clear_conversion_files: vi.fn(success), enqueue_conversions: vi.fn(success), prepare_conversion: vi.fn(success),
   }
   window.pywebview = { api }
-  return { api, update: (next: Partial<DesktopState>) => { state = { ...state, ...next } } }
+  return {
+    api,
+    update: (next: Partial<DesktopState>) => { state = { ...state, ...next } },
+    reply: (next: Partial<DesktopState>) => { state = { ...state, ...next }; return success() },
+  }
 }
 async function checkedApp() {
   const mock = fixture()
@@ -76,8 +81,8 @@ describe('desktop flow', () => {
   })
 
   it('shows checking errors without exposing a download choice', async () => {
-    const { api } = fixture()
-    api.check_url = vi.fn(async (checked: string) => ({ ok: true as const, state: { ...structuredClone(initialState), settings: { output: 'C:\\Downloads', max_height: null, max_size: null }, inspection: { status: 'failed' as const, id: '', url: checked, error: 'No supported media at this address.', assets: [] } } }))
+    const { api, reply } = fixture()
+    api.check_url = vi.fn((checked: string) => reply({ inspection: { status: 'failed', id: '', url: checked, error: 'No supported media at this address.', assets: [] } }))
     const user = userEvent.setup()
     render(<App />)
     await waitFor(() => expect(screen.getByLabelText('Media URL')).toBeEnabled())
@@ -102,7 +107,7 @@ describe('desktop flow', () => {
     expect(screen.getByText(/Waiting for the desktop connection/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Check' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Download' })).toBeDisabled()
-    expect(screen.getByText('No downloads yet')).toBeInTheDocument()
+    expect(screen.getByText('No tasks yet')).toBeInTheDocument()
     expect(screen.queryByText('A real checked title')).not.toBeInTheDocument()
   })
 
@@ -179,8 +184,8 @@ describe('desktop flow', () => {
   })
 
   it('explains inspected media with no format fitting the current limits', async () => {
-    const { api } = fixture()
-    api.check_url = vi.fn(async (checked: string) => ({ ok: true as const, state: { ...structuredClone(initialState), inspection: { status: 'ready' as const, id: 'limited', url: checked, error: null, assets: [{ id: 'asset-limit', title: 'A very large video', description: 'Exceeds the maximum file size', thumbnail: null, default_kind: '', kinds: [] }] } } }))
+    const { api, reply } = fixture()
+    api.check_url = vi.fn((checked: string) => reply({ inspection: { status: 'ready', id: 'limited', url: checked, error: null, assets: [{ id: 'asset-limit', title: 'A very large video', description: 'Exceeds the maximum file size', thumbnail: null, default_kind: '', kinds: [] }] } }))
     const user = userEvent.setup()
     render(<App />)
     await waitFor(() => expect(screen.getByLabelText('Media URL')).toBeEnabled())
@@ -213,5 +218,135 @@ describe('desktop flow', () => {
     expect(screen.getByRole('button', { name: 'Check' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Add multiple links' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Cancel Waited item' })).toBeEnabled()
+  })
+})
+
+const png: LocalImage = { id: 'image-1', name: 'Transparent icon.png', format: 'png', width: 640, height: 480, size: 1024, transparent: true, targets: ['jpg', 'webp'], error: null }
+const jpeg: LocalImage = { id: 'image-2', name: 'Photo.jpg', format: 'jpg', width: 1200, height: 800, size: 2048, transparent: false, targets: ['png', 'webp'], error: null }
+const invalidImage: LocalImage = { id: 'image-bad', name: 'Animated.webp', format: 'webp', width: null, height: null, size: 123, transparent: false, targets: [], error: 'Animated images are not supported.' }
+
+async function conversionApp(files: LocalImage[], tools: DesktopState['tools'] = { status: 'ready' }) {
+  const mock = fixture()
+  mock.update({ conversion: { status: 'ready', id: 'local-inspection', files, error: null }, tools })
+  const user = userEvent.setup()
+  render(<App />)
+  await waitFor(() => expect(screen.getByLabelText('Media URL')).toBeEnabled())
+  await user.click(screen.getByRole('tab', { name: 'Convert' }))
+  return { ...mock, user }
+}
+
+describe('local image conversion', () => {
+  it('preserves the checked Download choice and queue across both tabs', async () => {
+    const { user, update } = await checkedApp()
+    await user.click(screen.getByRole('radio', { name: 'Audio' }))
+    await user.click(screen.getByRole('radio', { name: /MP3/ }))
+    update({ tasks: [{ id: 'pending', url, title: 'Still running', kind: 'video', format: 'original', status: 'downloading', progress: 45, downloaded_bytes: 1024, total_bytes: 4096, speed: null, eta: null, path: null, error: null }] })
+    await user.click(screen.getByRole('tab', { name: 'Convert' }))
+    expect(screen.getByRole('tabpanel', { name: 'Convert' })).toBeVisible()
+    expect(screen.queryByRole('textbox', { name: 'Media URL' })).not.toBeInTheDocument()
+    expect(await screen.findByText('Still running')).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: 'Download' }))
+    expect(screen.getByLabelText('Media URL')).toHaveValue(url)
+    expect(screen.getByRole('radio', { name: 'Audio' })).toBeChecked()
+    expect(screen.getByRole('radio', { name: /MP3/ })).toBeChecked()
+    expect(screen.getByText('Still running')).toBeInTheDocument()
+  })
+
+  it('uses a native file picker and only queues files after explicit Convert', async () => {
+    const { api, update } = fixture()
+    api.select_conversion_files = vi.fn(async () => {
+      update({ conversion: { status: 'ready', id: 'picked', files: [png, jpeg], error: null } })
+      return api.get_state()
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    await waitFor(() => expect(screen.getByLabelText('Media URL')).toBeEnabled())
+    await user.click(screen.getByRole('tab', { name: 'Convert' }))
+    expect(screen.getByRole('button', { name: 'Convert' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Add files' }))
+    expect(await screen.findByText(png.name)).toBeInTheDocument()
+    expect(api.select_conversion_files).toHaveBeenCalledOnce()
+    expect(api.enqueue_conversions).not.toHaveBeenCalled()
+    expect(screen.getAllByRole('radio')).toHaveLength(1)
+    expect(screen.getByRole('radio', { name: 'WebP' })).toBeChecked()
+    await user.click(screen.getByRole('button', { name: 'Convert' }))
+    await waitFor(() => expect(api.enqueue_conversions).toHaveBeenCalledWith(['image-1', 'image-2'], 'webp', '#FFFFFF'))
+  })
+
+  it('excludes invalid files and makes JPEG transparency loss explicit', async () => {
+    const { api, user } = await conversionApp([png, invalidImage])
+    expect(screen.getByText('Animated images are not supported.')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: `Select ${invalidImage.name}` })).toBeDisabled()
+    expect(screen.getByRole('checkbox', { name: `Select ${invalidImage.name}` })).not.toBeChecked()
+    expect(screen.getByRole('radio', { name: 'JPG' })).toBeChecked()
+    expect(screen.getByText(/JPG cannot keep transparency/)).toBeInTheDocument()
+    await user.click(screen.getByRole('radio', { name: 'Black' }))
+    await user.click(screen.getByRole('button', { name: 'Convert' }))
+    await waitFor(() => expect(api.enqueue_conversions).toHaveBeenCalledWith(['image-1'], 'jpg', '#000000'))
+    await user.click(screen.getByRole('radio', { name: 'WebP' }))
+    expect(screen.queryByRole('radiogroup', { name: 'JPG background' })).not.toBeInTheDocument()
+  })
+
+  it('recomputes common targets from the selected subset and keeps selection across polling', async () => {
+    const { api, user } = await conversionApp([png, jpeg])
+    expect(screen.queryByRole('radio', { name: 'JPG' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('checkbox', { name: `Select ${jpeg.name}` }))
+    expect(screen.getByRole('radio', { name: 'JPG' })).toBeChecked()
+    await act(() => new Promise(resolve => setTimeout(resolve, 450)))
+    expect(screen.getByRole('checkbox', { name: `Select ${jpeg.name}` })).not.toBeChecked()
+    await user.click(screen.getByRole('button', { name: 'Convert' }))
+    await waitFor(() => expect(api.enqueue_conversions).toHaveBeenCalledWith(['image-1'], 'jpg', '#FFFFFF'))
+    await user.click(screen.getByRole('button', { name: 'Select all' }))
+    await user.click(screen.getByRole('button', { name: 'Deselect all' }))
+    expect(screen.getByRole('button', { name: 'Convert' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Select all' }))
+    expect(screen.getByRole('radio', { name: 'WebP' })).toBeChecked()
+  })
+
+  it('explains mixed selections without any common target rather than offering an invalid conversion', async () => {
+    const webp: LocalImage = { ...png, id: 'webp', name: 'Picture.webp', format: 'webp', targets: ['png', 'jpg'] }
+    await conversionApp([png, jpeg, webp])
+    expect(screen.getByText(/no shared output format/)).toBeInTheDocument()
+    expect(screen.queryByRole('radiogroup', { name: 'Conversion format' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Convert' })).toBeDisabled()
+  })
+
+  it('allows local conversion and retries while download tools are missing', async () => {
+    const { api, user, update } = await conversionApp([png], { status: 'missing' })
+    expect(screen.queryByRole('button', { name: 'Install tools' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add files' })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: 'Convert' }))
+    await waitFor(() => expect(api.enqueue_conversions).toHaveBeenCalledOnce())
+    update({ tasks: [{ id: 'local-failed', url: '', title: 'Image conversion', action: 'convert', source_format: 'png', kind: 'image', format: 'jpg', status: 'failed', progress: null, downloaded_bytes: 0, total_bytes: null, speed: null, eta: null, path: null, error: 'Temporary output failure.' }] })
+    await user.click(await screen.findByRole('button', { name: 'Retry Image conversion' }))
+    await waitFor(() => expect(api.retry_task).toHaveBeenCalledWith('local-failed'))
+  })
+
+  it('opens completed static images in Convert without starting conversion automatically', async () => {
+    const { api, update } = fixture()
+    update({ tasks: [{ id: 'completed-image', url, title: 'Downloaded photo', action: 'download', can_convert: true, kind: 'image', format: 'original', status: 'completed', progress: 100, downloaded_bytes: 1024, total_bytes: 1024, speed: null, eta: null, path: 'C:\\Downloads\\photo.png', error: null }] })
+    api.prepare_conversion = vi.fn(async () => {
+      update({ conversion: { status: 'ready', id: 'prepared', files: [png], error: null } })
+      return api.get_state()
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: 'Convert file Downloaded photo' }))
+    expect(await screen.findByRole('tabpanel', { name: 'Convert' })).toBeVisible()
+    expect(screen.getByText(png.name)).toBeVisible()
+    expect(api.prepare_conversion).toHaveBeenCalledWith('completed-image')
+    expect(api.enqueue_conversions).not.toHaveBeenCalled()
+  })
+
+  it('shows indeterminate conversion activity and allows cancellation', async () => {
+    const { api, update } = fixture()
+    update({ tasks: [{ id: 'local-active', url: '', title: 'Converting image', action: 'convert', source_format: 'png', kind: 'image', format: 'webp', status: 'converting', progress: null, downloaded_bytes: 0, total_bytes: null, speed: null, eta: null, path: null, error: null }] })
+    const user = userEvent.setup()
+    render(<App />)
+    expect(await screen.findByText('Encoding image…')).toBeInTheDocument()
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+    expect(screen.getByText('PNG → WEBP')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel Converting image' }))
+    await waitFor(() => expect(api.cancel_task).toHaveBeenCalledWith('local-active'))
   })
 })

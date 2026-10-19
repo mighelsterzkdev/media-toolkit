@@ -7,8 +7,11 @@ from copy import deepcopy
 from dataclasses import replace
 from io import BytesIO
 import math
+import os
 from pathlib import Path
 import re
+import shutil
+import tempfile
 import threading
 import time
 from uuid import uuid4
@@ -27,8 +30,9 @@ from .resume import pending_resumes
 from .urls import validate_url
 
 TERMINAL = frozenset(("completed", "existing", "failed", "cancelled"))
-ACTIVE = frozenset(("checking", "downloading", "finalizing", "cancelling"))
+ACTIVE = frozenset(("checking", "downloading", "converting", "finalizing", "cancelling"))
 MAX_QUEUED_IMAGE_BYTES = 128 * 1024 * 1024
+MAX_CONVERSION_FILES = 100
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _ERROR_URL = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 
@@ -141,10 +145,14 @@ class DesktopService:
         self._wake = threading.Event()
         self._closed = False
         self._generation = 0
+        self._conversion_generation = 0
         self._inspection_worker = None
+        self._conversion_worker = None
         self._download_worker = None
         self._workers = set()
         self._assets = {}
+        self._local_sources = {}
+        self._local_images = {}
         self._tasks = []
         self._notice = None
         try:
@@ -154,6 +162,7 @@ class DesktopService:
             self._notice = safe_error(error)
         self._settings = {"output": str(Path(saved.get("output") or default_output or PROJECT_ROOT / "downloads").expanduser().resolve()), "max_height": saved.get("max_height"), "max_size": saved.get("max_size")}
         self._inspection = self._idle_inspection()
+        self._conversion = self._idle_conversion()
         self._resume_time = 0
         self._resume_count = 0
         self._queue_thread = threading.Thread(target=self._run_queue, name="UniversalDownloader-queue", daemon=True)
@@ -162,6 +171,10 @@ class DesktopService:
     @staticmethod
     def _idle_inspection():
         return {"status": "idle", "id": None, "url": "", "error": None, "assets": []}
+
+    @staticmethod
+    def _idle_conversion():
+        return {"status": "idle", "id": None, "files": [], "error": None}
 
     def _ensure_open(self):
         if self._closed:
@@ -176,7 +189,7 @@ class DesktopService:
                     self._resume_count = 0
                 self._resume_time = time.monotonic()
             tasks = [{key: value for key, value in task.items() if not key.startswith("_")} for task in self._tasks]
-            return deepcopy({"version": __version__, "settings": self._settings, "inspection": self._inspection, "tasks": tasks, "notice": self._notice, "resume_count": self._resume_count})
+            return deepcopy({"version": __version__, "settings": self._settings, "inspection": self._inspection, "conversion": self._conversion, "tasks": tasks, "notice": self._notice, "resume_count": self._resume_count})
 
     def check_url(self, url):
         if not isinstance(url, str) or len(url) > MAX_URL_LENGTH:
@@ -194,15 +207,19 @@ class DesktopService:
         threading.Thread(target=self._inspect, args=(url, generation), name="UniversalDownloader-check", daemon=True).start()
         return self.get_state()
 
-    def _create_worker(self, *, generation=None, task=None, attempt=None):
+    def _create_worker(self, *, generation=None, conversion_generation=None, task=None, attempt=None):
         worker = ProcessWorker()
         with self._lock:
-            if self._closed or (generation is not None and generation != self._generation) or (task is not None and (task["status"] == "cancelled" or task["_attempt"] != attempt)):
+            if (self._closed or (generation is not None and generation != self._generation)
+                    or (conversion_generation is not None and conversion_generation != self._conversion_generation)
+                    or (task is not None and (task["status"] in ("cancelled", "cancelling") or task["_attempt"] != attempt))):
                 worker.close()
                 return None
             self._workers.add(worker)
             if generation is not None:
                 self._inspection_worker = worker
+            elif conversion_generation is not None:
+                self._conversion_worker = worker
             else:
                 self._download_worker = worker
         return worker
@@ -214,6 +231,8 @@ class DesktopService:
                 self._workers.discard(worker)
                 if self._inspection_worker is worker:
                     self._inspection_worker = None
+                if self._conversion_worker is worker:
+                    self._conversion_worker = None
                 if self._download_worker is worker:
                     self._download_worker = None
 
@@ -263,6 +282,147 @@ class DesktopService:
             worker.close()
         return self.get_state()
 
+    def _start_local_check(self):
+        """Called with the lock; every restart invalidates the previous result."""
+        self._conversion_generation += 1
+        generation = self._conversion_generation
+        previous = self._conversion_worker
+        sources = list(self._local_sources.items())
+        self._local_images = {}
+        self._conversion.update(status="checking" if sources else "idle", id=None, error=None)
+        return previous, generation, sources
+
+    def _launch_local_check(self, previous, generation, sources):
+        if previous:
+            previous.close()
+        if sources:
+            threading.Thread(target=self._inspect_local, args=(sources, generation), name="MediaToolkit-local-check", daemon=True).start()
+
+    def add_conversion_files(self, paths):
+        if not isinstance(paths, (list, tuple)) or not paths or len(paths) > MAX_CONVERSION_FILES:
+            raise DownloadError("Choose between 1 and 100 image files.")
+        normalized = []
+        for value in paths:
+            if not isinstance(value, (str, Path)):
+                raise DownloadError("Choose valid local image files.")
+            value = str(value)
+            if not value or len(value) > 8192 or any(ord(character) < 32 for character in value) or not Path(value).is_absolute():
+                raise DownloadError("Choose valid local image files with absolute paths.")
+            try:
+                normalized.append(str(Path(value).resolve()))
+            except (OSError, ValueError) as error:
+                raise DownloadError("This image file path could not be opened.") from error
+        with self._lock:
+            self._ensure_open()
+            known = {os.path.normcase(source) for source in self._local_sources.values()}
+            additions = []
+            for source in normalized:
+                identity = os.path.normcase(source)
+                if identity not in known:
+                    additions.append(source)
+                    known.add(identity)
+            if len(self._local_sources) + len(additions) > MAX_CONVERSION_FILES:
+                raise DownloadError("The converter supports up to 100 selected files. Remove some files first.")
+            for source in additions:
+                identifier = uuid4().hex
+                self._local_sources[identifier] = source
+                self._conversion["files"].append({"id": identifier, "name": _text(Path(source).name, 300), "format": None,
+                                                  "width": None, "height": None, "size": None, "transparent": False, "targets": [], "error": None})
+            launch = self._start_local_check()
+        self._launch_local_check(*launch)
+        return self.get_state()
+
+    def _inspect_local(self, sources, generation):
+        worker = None
+        try:
+            worker = self._create_worker(conversion_generation=generation)
+            if worker is None:
+                return
+            worker.begin({"action": "inspect_local", "paths": [source for _, source in sources]})
+            result = None
+            for event, payload in worker.events():
+                if event == "local_inspection":
+                    result = payload
+                elif event == "error":
+                    raise DownloadError(payload["message"], code=payload["code"])
+            if not isinstance(result, list) or len(result) != len(sources):
+                raise DownloadError("The image check stopped before returning its result. Add the files again.")
+            with self._lock:
+                if self._closed or generation != self._conversion_generation:
+                    return
+                files, images = [], {}
+                for (identifier, source), image in zip(sources, result):
+                    # Only a fixed metadata schema crosses the native bridge.
+                    public = {key: image.get(key) for key in ("format", "width", "height", "size", "transparent", "targets", "error")}
+                    public.update(id=identifier, name=_text(Path(source).name, 300))
+                    files.append(public)
+                    if not image.get("error"):
+                        images[identifier] = deepcopy(image)
+                self._local_images = images
+                self._conversion = {"status": "ready", "id": uuid4().hex, "files": files, "error": None}
+        except BaseException as error:
+            with self._lock:
+                if not self._closed and generation == self._conversion_generation:
+                    self._local_images = {}
+                    self._conversion.update(status="failed", id=None, error=safe_error(error))
+        finally:
+            self._forget_worker(worker)
+
+    def remove_conversion_file(self, identifier):
+        with self._lock:
+            self._ensure_open()
+            if not isinstance(identifier, str) or identifier not in self._local_sources:
+                raise DownloadError("This selected image no longer exists.")
+            self._local_sources.pop(identifier)
+            self._conversion["files"] = [image for image in self._conversion["files"] if image["id"] != identifier]
+            launch = self._start_local_check()
+        self._launch_local_check(*launch)
+        return self.get_state()
+
+    def clear_conversion_files(self):
+        with self._lock:
+            self._ensure_open()
+            self._local_sources = {}
+            self._conversion = self._idle_conversion()
+            launch = self._start_local_check()
+        self._launch_local_check(*launch)
+        return self.get_state()
+
+    def enqueue_conversions(self, identifiers, target, background="#FFFFFF"):
+        if (not isinstance(identifiers, list) or not identifiers or len(identifiers) > MAX_CONVERSION_FILES
+                or any(not isinstance(identifier, str) for identifier in identifiers) or len(set(identifiers)) != len(identifiers)):
+            raise DownloadError("Select between 1 and 100 checked image files.")
+        if target not in ("png", "jpg", "webp") or background not in ("#FFFFFF", "#000000"):
+            raise DownloadError("Choose an available image format and a white or black JPEG background.")
+        with self._lock:
+            self._ensure_open()
+            if self._conversion["status"] != "ready":
+                raise DownloadError("Wait for the selected images to be checked before converting.")
+            records = []
+            for identifier in identifiers:
+                image = self._local_images.get(identifier)
+                if image is None or target not in image["targets"]:
+                    raise DownloadError("Choose a compatible format for every selected image.")
+                records.append(deepcopy(image))
+            settings = deepcopy(self._settings)
+            # Background only affects alpha flattened into JPEG. Irrelevant
+            # settings must not make two identical conversions distinct.
+            identities = [("convert", image["source"], image["signature"], target,
+                           background if target == "jpg" and image["transparent"] else None, settings["output"]) for image in records]
+            active = [task["_identity"] for task in self._tasks if task["status"] not in TERMINAL]
+            additions = [(image, identity) for image, identity in zip(records, identities) if identity not in active]
+            if len(self._tasks) + len(additions) > MAX_QUEUE_URLS:
+                raise DownloadError("The queue supports up to 1,000 items. Remove finished items first.")
+            for image, identity in additions:
+                self._tasks.append({"id": uuid4().hex, "url": "", "title": _text(image["name"], 300), "action": "convert",
+                                    "source_format": image["format"], "can_convert": False, "kind": "image", "format": target,
+                                    "status": "queued", "progress": None, "downloaded_bytes": 0, "total_bytes": None,
+                                    "speed": None, "eta": None, "path": None, "error": None,
+                                    "_identity": identity, "_settings": deepcopy(settings), "_image": image,
+                                    "_background": background, "_inspected": None, "_attempt": None})
+            self._wake.set()
+        return self.get_state()
+
     def _add_task(self, url, inspected=None, kind=None, output_format="original"):
         settings = deepcopy(self._settings)
         policy = "default" if kind is None or (inspected and kind == inspected.kinds[0]) else kind
@@ -279,6 +439,7 @@ class DesktopService:
             if sum(buffers.values()) > MAX_QUEUED_IMAGE_BYTES:
                 raise DownloadError("The queue is holding too much image data. Wait for active downloads or clear finished items before adding more.")
         task = {"id": uuid4().hex, "url": url, "title": _text(inspected.information.get("title") or "Download", 300) if inspected else url,
+                "action": "download", "source_format": None, "can_convert": False,
                 "kind": kind, "format": output_format, "status": "queued", "progress": None,
                 "downloaded_bytes": 0, "total_bytes": None, "speed": None, "eta": None, "path": None, "error": None,
                 "_identity": identity, "_settings": settings, "_inspected": inspected, "_attempt": None}
@@ -333,7 +494,7 @@ class DesktopService:
                     return
                 task = next((item for item in self._tasks if item["status"] == "queued"), None)
                 if task:
-                    task["status"] = "checking" if task["_inspected"] is None else "downloading"
+                    task["status"] = "converting" if task["action"] == "convert" else ("checking" if task["_inspected"] is None else "downloading")
                     task["_attempt"] = uuid4().hex
                     attempt = task["_attempt"]
             if task:
@@ -343,11 +504,34 @@ class DesktopService:
     def _run_task(self, task, attempt):
         worker = None
         result = None
+        work_dir = None
+
+        def stop_worker():
+            nonlocal worker, work_dir
+            self._forget_worker(worker)
+            worker = None
+            if work_dir is not None:
+                # This exact private directory was created by this attempt.
+                # Remove it only after containment has stopped the worker.
+                root = Path(task["_settings"]["output"]).resolve()
+                if work_dir.parent == root and work_dir.name.startswith(".unidown-convert-") and not work_dir.is_symlink():
+                    shutil.rmtree(work_dir, ignore_errors=True)
+                work_dir = None
+
         try:
             worker = self._create_worker(task=task, attempt=attempt)
             if worker is None:
                 return
-            worker.begin({"action": "download", "url": task["url"], "inspected": task["_inspected"], "kind": task["kind"], "format": task["format"], "settings": task["_settings"]})
+            payload = {"action": task["action"], "url": task["url"], "inspected": task["_inspected"], "kind": task["kind"], "format": task["format"], "settings": task["_settings"]}
+            if task["action"] == "convert":
+                output = Path(task["_settings"]["output"]).resolve()
+                try:
+                    output.mkdir(parents=True, exist_ok=True)
+                    work_dir = Path(tempfile.mkdtemp(prefix=".unidown-convert-", dir=output)).resolve()
+                except OSError as error:
+                    raise DownloadError("The output folder could not be prepared. Choose another folder and retry.") from error
+                payload.update(image=task["_image"], background=task["_background"], work_dir=str(work_dir))
+            worker.begin(payload)
             for event, payload in worker.events():
                 with self._lock:
                     if task["_attempt"] != attempt or task["status"] in ("cancelled", "cancelling") or self._closed:
@@ -356,7 +540,9 @@ class DesktopService:
                         task.update(title=_text(payload["title"], 300), kind=payload["kind"], status="downloading")
                     elif event == "progress":
                         status = payload["status"]
-                        if status in ("finished", "converting"):
+                        if task["action"] == "convert" and status == "converting":
+                            task.update(status="converting", progress=None, speed=None, eta=None)
+                        elif status in ("finished", "converting"):
                             task.update(status="finalizing", progress=None, speed=None, eta=None)
                         elif status in ("downloading", "resuming"):
                             total = payload.get("total_bytes") or payload.get("total_bytes_estimate")
@@ -367,6 +553,7 @@ class DesktopService:
                         result = payload
                     elif event == "error":
                         raise DownloadError(payload["message"], code=payload["code"])
+            stop_worker()
             with self._lock:
                 if task["_attempt"] != attempt:
                     return
@@ -378,11 +565,14 @@ class DesktopService:
                     if path.parent != root or not path.is_file():
                         raise DownloadError("The media worker did not produce a completed output file.")
                     task.update(status="existing" if result["already_exists"] else "completed", progress=100,
-                                path=str(path), title=_text(result["title"], 300), error=None, speed=None, eta=None)
+                                path=str(path), title=_text(result["title"], 300), error=None, speed=None, eta=None,
+                                can_convert=bool(result.get("can_convert")))
                 else:
-                    raise DownloadError("The media worker stopped before completing the download. Retry to continue a supported partial download.")
+                    message = "The image conversion stopped before completing. Retry to convert it again." if task["action"] == "convert" else "The media worker stopped before completing the download. Retry to continue a supported partial download."
+                    raise DownloadError(message)
                 self._compact_task(task)
         except BaseException as error:
+            stop_worker()
             with self._lock:
                 if task["_attempt"] != attempt:
                     return
@@ -392,7 +582,7 @@ class DesktopService:
                     task.update(status="failed", error=safe_error(error), progress=None, speed=None, eta=None)
                 self._compact_task(task)
         finally:
-            self._forget_worker(worker)
+            stop_worker()
             with self._lock:
                 self._resume_time = 0
 
@@ -432,8 +622,8 @@ class DesktopService:
                 raise DownloadError("Wait for this item to stop before retrying it.")
             for other in self._tasks:
                 if other is not task and other["_identity"] == task["_identity"] and other["status"] not in TERMINAL:
-                    raise DownloadError("This download is already in the queue.")
-            task.update(status="queued", progress=None, downloaded_bytes=0, total_bytes=None, speed=None, eta=None, path=None, error=None)
+                    raise DownloadError("This item is already in the queue.")
+            task.update(status="queued", progress=None, downloaded_bytes=0, total_bytes=None, speed=None, eta=None, path=None, error=None, can_convert=False)
             self._wake.set()
         return self.get_state()
 
@@ -481,7 +671,7 @@ class DesktopService:
 
     def active_jobs(self):
         with self._lock:
-            return self._inspection["status"] == "checking" or any(task["status"] not in TERMINAL for task in self._tasks)
+            return self._inspection["status"] == "checking" or self._conversion["status"] == "checking" or any(task["status"] not in TERMINAL for task in self._tasks)
 
     def shutdown(self):
         with self._lock:
@@ -489,8 +679,11 @@ class DesktopService:
                 return
             self._closed = True
             self._generation += 1
+            self._conversion_generation += 1
             workers = list(self._workers)
             self._assets = {}
+            self._local_sources = {}
+            self._local_images = {}
             for task in self._tasks:
                 if task["status"] not in TERMINAL:
                     task["status"] = "cancelled"

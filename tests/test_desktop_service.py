@@ -87,9 +87,12 @@ class DesktopServiceTests(unittest.TestCase):
         Image.new("RGB", (320, 200), "green").save(image, "PNG")
         other = BytesIO()
         Image.new("RGB", (500, 300), "blue").save(other, "JPEG")
+        animation = BytesIO()
+        Image.new("RGB", (30, 20), "red").save(animation, "GIF", save_all=True, append_images=[Image.new("RGB", (30, 20), "blue")], duration=100, loop=0)
         _Handler.bodies = {
             "/image.png": (image.getvalue(), "image/png"),
             "/other.jpg": (other.getvalue(), "image/jpeg"),
+            "/animation.gif": (animation.getvalue(), "image/gif"),
             "/slow.html": (b'<html><head><title>Slow page</title></head><body><img src="/other.jpg"></body></html>', "text/html"),
             "/multiple.html": (b'<html><head><title>Several images</title></head><body><img src="/image.png"><img src="/other.jpg"></body></html>', "text/html"),
         }
@@ -147,6 +150,31 @@ class DesktopServiceTests(unittest.TestCase):
         path = self.service.completed_path(state["tasks"][0]["id"])
         self.assertEqual(path.read_bytes(), _Handler.bodies["/image.png"][0])
         self.assertEqual(state["tasks"][0]["progress"], 100)
+        self.assertEqual(state["tasks"][0]["action"], "download")
+        self.assertTrue(state["tasks"][0]["can_convert"])
+
+    def test_original_animation_does_not_offer_static_conversion_shortcut(self):
+        inspection = self.inspect("/animation.gif")
+        self.enqueue_inspected(inspection)
+        state = self.wait(lambda state: state["tasks"][0]["status"] in ("completed", "failed"))
+        self.assertEqual(state["tasks"][0]["status"], "completed", state)
+        self.assertFalse(state["tasks"][0]["can_convert"])
+
+    def test_local_conversions_share_the_download_queue_and_independent_inspection(self):
+        source = self.root / "local.png"
+        source.write_bytes(_Handler.bodies["/image.png"][0])
+        self.service.add_conversion_files([source])
+        self.service.check_url(self.base + "/slow.html")
+        self.service.check_url(self.base + "/image.png")
+        state = self.wait(lambda state: state["conversion"]["status"] == "ready" and state["inspection"]["status"] == "ready")
+        self.assertEqual(state["inspection"]["url"], self.base + "/image.png")
+        with self.service._lock:
+            self.service.enqueue_links(self.base + "/image.png")
+            self.service.enqueue_conversions([state["conversion"]["files"][0]["id"]], "jpg", "#FFFFFF")
+        state = self.wait(lambda state: len(state["tasks"]) == 2 and all(task["status"] in ("failed", "completed") for task in state["tasks"]))
+        self.assertEqual([task["status"] for task in state["tasks"]], ["completed", "completed"], state)
+        self.assertEqual([task["action"] for task in state["tasks"]], ["download", "convert"])
+        self.assertTrue(all(task["can_convert"] for task in state["tasks"]))
 
     def test_bulk_failure_continues_and_duplicate_urls_are_deduplicated(self):
         self.service.enqueue_links(f"# URLs\n{self.base}/missing.png\n{self.base}/image.png {self.base}/image.png\n{self.base}/other.jpg")

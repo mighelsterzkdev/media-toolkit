@@ -16,7 +16,7 @@ import sys
 import threading
 from urllib.parse import unquote, urlsplit
 
-from . import __version__
+from . import APP_NAME, __version__
 from .dependencies import PROJECT_ROOT, find_ffmpeg, find_js_runtime
 from .errors import DownloadError
 from .preferences import preferences_path
@@ -93,11 +93,14 @@ class DesktopApi:
 
     def _media_call(self, action, *args):
         def ready():
-            with self._tools_lock:
-                if self._tools["status"] != "ready":
-                    raise DownloadError("The download tools are not ready. Click Prepare tools, then try again.")
+            self._require_download_tools()
             return action(*args)
         return self._call(ready)
+
+    def _require_download_tools(self):
+        with self._tools_lock:
+            if self._tools["status"] != "ready":
+                raise DownloadError("The download tools are not ready. Click Install tools, then try again.")
 
     def check_url(self, url):
         return self._media_call(self._service.check_url, url)
@@ -115,7 +118,13 @@ class DesktopApi:
         return self._call(self._service.cancel_task, task_id)
 
     def retry_task(self, task_id):
-        return self._media_call(self._service.retry_task, task_id)
+        # Local image conversions do not use the optional download tools.
+        def retry():
+            tasks = self._service.get_state().get("tasks", ())
+            if not any(task.get("id") == task_id and task.get("action") == "convert" for task in tasks):
+                self._require_download_tools()
+            return self._service.retry_task(task_id)
+        return self._call(retry)
 
     def remove_finished(self):
         return self._call(self._service.remove_finished)
@@ -134,6 +143,40 @@ class DesktopApi:
                 return self._service.save_settings({"output": str(Path(paths[0]).resolve())})
             return self._service.get_state()
         return self._call(browse)
+
+    def select_conversion_files(self):
+        def select():
+            if self._window is None or self._webview is None:
+                raise DownloadError("The file picker is not available yet.")
+            directory = self._service.output_directory()
+            paths = self._window.create_file_dialog(
+                self._webview.FileDialog.OPEN,
+                directory=str(directory if directory.is_dir() else Path.home()),
+                allow_multiple=True,
+                file_types=("Images (*.png;*.jpg;*.jpeg;*.webp)", "All files (*.*)"),
+            )
+            return self._service.add_conversion_files(list(paths)) if paths else self._service.get_state()
+        return self._call(select)
+
+    def remove_conversion_file(self, file_id):
+        return self._call(self._service.remove_conversion_file, file_id)
+
+    def clear_conversion_files(self):
+        return self._call(self._service.clear_conversion_files)
+
+    def enqueue_conversions(self, file_ids, target, background="#FFFFFF"):
+        return self._call(self._service.enqueue_conversions, file_ids, target, background)
+
+    def prepare_conversion(self, task_id):
+        def prepare():
+            if not isinstance(task_id, str) or not task_id or len(task_id) > 100:
+                raise DownloadError("Choose a completed image to convert.")
+            source = self._service.completed_path(task_id)
+            # This shortcut starts a conversion for that file, rather than
+            # mixing it with an unrelated previous selection.
+            self._service.clear_conversion_files()
+            return self._service.add_conversion_files([str(source)])
+        return self._call(prepare)
 
     def open_folder(self, task_id=None):
         def open_recorded_folder():
@@ -191,7 +234,7 @@ class DesktopApi:
 class _AssetHandler(BaseHTTPRequestHandler):
     """Serve only bundled static assets; there is no HTTP command endpoint."""
 
-    server_version = "UniversalDownloader"
+    server_version = "MediaToolkit"
     sys_version = ""
 
     def log_message(self, *_args):
@@ -338,7 +381,7 @@ def _enable_per_monitor_dpi():
 def _fatal(message):
     if os.name == "nt":
         import ctypes
-        ctypes.windll.user32.MessageBoxW(None, message, "Universal Downloader", 0x10)
+        ctypes.windll.user32.MessageBoxW(None, message, APP_NAME, 0x10)
     elif sys.stderr is not None:
         print(message, file=sys.stderr)
 
@@ -370,7 +413,7 @@ def main() -> int:
         webview.settings["ALLOW_FILE_URLS"] = False
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = False
         window = webview.create_window(
-            "Universal Downloader", server.url, js_api=api, width=1000, height=760,
+            APP_NAME, server.url, js_api=api, width=1000, height=760,
             min_size=(760, 600), background_color="#09090b", text_select=True,
         )
         api._window, api._webview = window, webview
@@ -383,7 +426,7 @@ def main() -> int:
                 preparing = api._tools["status"] == "installing"
             active = preparing or service.active_jobs()
             if active and not window.create_confirmation_dialog(
-                "Close Universal Downloader?", "There is work in progress. Close the app and stop the current work? Supported interrupted downloads can be resumed later.",
+                f"Close {APP_NAME}?", "There is work in progress. Close the app and stop the current work? Supported interrupted downloads can be resumed later.",
             ):
                 return False
             api._closed = True

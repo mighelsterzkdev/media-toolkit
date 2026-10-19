@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowDownToLine, ArrowRight, ChevronRight, CircleAlert, FileImage, FileVideo, Folder, Link2, LoaderCircle, Music2, X } from 'lucide-react'
+import { ArrowDownToLine, ArrowRight, ArrowRightLeft, CircleAlert, FileImage, FileVideo, Link2, LoaderCircle, Music2, X } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
 import { Label } from './components/ui/label'
@@ -7,6 +7,9 @@ import { RadioGroup, RadioGroupItem } from './components/ui/radio-group'
 import { BatchDialog } from './components/BatchDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { TaskList } from './components/TaskList'
+import { ConvertPanel } from './components/ConvertPanel'
+import { SaveDestination } from './components/SaveDestination'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs'
 import { useDesktop } from './use-desktop'
 import { normalizeUrlInput, sourceHost } from './format'
 import type { MediaAsset } from './types'
@@ -21,6 +24,7 @@ function defaultSelection(inspection: string | null, asset: MediaAsset): Selecti
 
 export default function App() {
   const { state, connected, error, pending, invoke, dismissError } = useDesktop()
+  const [tab, setTab] = useState('download')
   const [url, setUrl] = useState('')
   const [checkedDraft, setCheckedDraft] = useState<string | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
@@ -68,22 +72,30 @@ export default function App() {
     const nextKind = asset.kinds.find(item => item.id === value)
     if (nextKind) setSelection({ inspection: state.inspection.id, asset: asset.id, kind: value, option: nextKind.options.find(item => item.recommended)?.id ?? nextKind.options[0]?.id ?? '' })
   }
-  const activeCount = state.tasks.filter(task => ['queued', 'checking', 'downloading', 'finalizing', 'cancelling'].includes(task.status)).length
+  const activeCount = state.tasks.filter(task => ['queued', 'checking', 'downloading', 'converting', 'finalizing', 'cancelling'].includes(task.status)).length
 
-  return <div className="app-shell">
+  async function prepareConversion(id: string) {
+    const result = await invoke('prepare_conversion', id)
+    if (result) setTab('convert')
+  }
+
+  return <Tabs value={tab} onValueChange={setTab} className="app-shell">
     <header className="app-header">
-      <h1>Universal Downloader</h1>
+      <div className="app-header-main"><h1>Media Toolkit</h1>
+        <TabsList aria-label="Media tools"><TabsTrigger value="download"><ArrowDownToLine className="size-4" />Download</TabsTrigger><TabsTrigger value="convert"><ArrowRightLeft className="size-4" />Convert</TabsTrigger></TabsList>
+      </div>
       <SettingsDialog state={state} disabled={disconnected} busy={busy} onSave={value => invoke('save_settings', value)} onClearResume={() => invoke('clear_resume')} />
     </header>
 
-    {!connected || error || state.notice || state.tools.status !== 'ready' ? <div className="app-notices">
-    {!connected ? <div className="notice" role="status"><CircleAlert className="size-4 shrink-0" /><span>Waiting for the desktop connection. Open this app with Universal Downloader.</span></div> : null}
+    {!connected || error || state.notice || (tab === 'download' && state.tools.status !== 'ready') ? <div className="app-notices">
+    {!connected ? <div className="notice" role="status"><CircleAlert className="size-4 shrink-0" /><span>Waiting for the desktop connection. Open this app with Media Toolkit.</span></div> : null}
     {error ? <div className="notice notice-error" role="alert"><CircleAlert className="size-4 shrink-0" /><span>{error}</span><Button variant="ghost" size="icon" aria-label="Dismiss error" onClick={dismissError}><X /></Button></div> : null}
     {state.notice ? <div className="notice" role="status"><span>{state.notice}</span></div> : null}
-    {connected && state.tools.status !== 'ready' ? <div className="notice tools-notice" role="status"><CircleAlert className="size-4 shrink-0" /><span>{state.tools.message || state.tools.error || (state.tools.status === 'installing' ? 'Installing media tools…' : 'Install media tools to enable all download and conversion options.')}</span><Button variant="outline" size="sm" disabled={state.tools.status === 'installing' || busy} onClick={() => void invoke('install_tools')}>{state.tools.status === 'installing' ? <LoaderCircle className="animate-spin" /> : null}{state.tools.status === 'failed' ? 'Retry installation' : 'Install tools'}</Button></div> : null}
+    {connected && tab === 'download' && state.tools.status !== 'ready' ? <div className="notice tools-notice" role="status"><CircleAlert className="size-4 shrink-0" /><span>{state.tools.message || state.tools.error || (state.tools.status === 'installing' ? 'Installing media tools…' : 'Install media tools to enable downloads. Local image conversion is ready to use.')}</span><Button variant="outline" size="sm" disabled={state.tools.status === 'installing' || busy} onClick={() => void invoke('install_tools')}>{state.tools.status === 'installing' ? <LoaderCircle className="animate-spin" /> : null}{state.tools.status === 'failed' ? 'Retry installation' : 'Install tools'}</Button></div> : null}
     </div> : null}
 
     <main className="app-content">
+      <TabsContent value="download" forceMount hidden={tab !== 'download'} className="tool-panel">
       <section className="download-card" aria-labelledby="new-download-heading">
         <div className="section-heading new-download-heading"><h2 id="new-download-heading">New download</h2><BatchDialog disabled={disconnected || !toolsReady} busy={busy || installing} onEnqueue={text => invoke('enqueue_links', text)} /></div>
         <form onSubmit={check} className="url-form">
@@ -113,12 +125,16 @@ export default function App() {
         {!checking && !ready && !inspectionError ? <p className="url-hint">Check a link to see the available files and formats.</p> : null}
         {ready && assets.length === 0 ? <p className="url-hint">No downloadable media was found at this link.</p> : null}
         <div className="download-footer">
-          <div className="folder-destination"><Folder className="size-4 shrink-0" aria-hidden="true" /><div><span>Save to</span><p title={state.settings.output}>{state.settings.output || 'Your download folder'}</p></div><Button type="button" variant="ghost" size="sm" disabled={disconnected || busy} onClick={() => void invoke('browse_folder')}>Browse<ChevronRight className="size-3.5" /></Button></div>
+          <SaveDestination output={state.settings.output} disabled={disconnected || busy} onBrowse={() => void invoke('browse_folder')} />
           <Button className="download-button" onClick={() => void download()} disabled={!canDownload}>{downloadBusy ? <LoaderCircle className="animate-spin" /> : <ArrowDownToLine />}Download</Button>
         </div>
       </section>
-      <TaskList tasks={state.tasks} disabled={disconnected || busy} retryDisabled={!toolsReady} onCancel={id => void invoke('cancel_task', id)} onRetry={id => void invoke('retry_task', id)} onOpen={id => void invoke('open_folder', id)} onClear={() => void invoke('remove_finished')} />
+      </TabsContent>
+      <TabsContent value="convert" forceMount hidden={tab !== 'convert'} className="tool-panel">
+        <ConvertPanel conversion={state.conversion} output={state.settings.output} disabled={disconnected || busy} onAdd={() => void invoke('select_conversion_files')} onRemove={id => void invoke('remove_conversion_file', id)} onClear={() => void invoke('clear_conversion_files')} onBrowse={() => void invoke('browse_folder')} onConvert={(ids, target, background) => invoke('enqueue_conversions', ids, target, background)} />
+      </TabsContent>
+      <TaskList tasks={state.tasks} disabled={disconnected || busy} retryDisabled={!toolsReady} onCancel={id => void invoke('cancel_task', id)} onRetry={id => void invoke('retry_task', id)} onOpen={id => void invoke('open_folder', id)} onClear={() => void invoke('remove_finished')} onConvert={id => void prepareConversion(id)} />
     </main>
-    <footer className="app-footer"><span>{activeCount > 0 ? `${activeCount} active ${activeCount === 1 ? 'download' : 'downloads'}` : 'Ready when you are'}</span><span>{state.version ? `v${state.version}` : 'Desktop'}</span></footer>
-  </div>
+    <footer className="app-footer"><span>{activeCount > 0 ? `${activeCount} active ${activeCount === 1 ? 'task' : 'tasks'}` : 'Ready when you are'}</span><span>{state.version ? `v${state.version}` : 'Desktop'}</span></footer>
+  </Tabs>
 }

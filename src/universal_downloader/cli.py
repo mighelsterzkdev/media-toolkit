@@ -16,7 +16,7 @@ from urllib.parse import unquote, urlsplit
 from PIL import __version__ as pillow_version
 from yt_dlp.version import __version__ as ytdlp_version
 
-from . import __version__
+from . import APP_NAME, __version__
 from .dependencies import find_ffmpeg, find_js_runtime
 from .conversions import available_conversions, conversion_kind
 from .compatibility import compatibility_issues
@@ -387,7 +387,7 @@ def _apply_preferences(args) -> None:
 
 
 def _doctor() -> int:
-    print(f"Universal Downloader {__version__} | yt-dlp {ytdlp_version}")
+    print(f"{APP_NAME} {__version__} | yt-dlp {ytdlp_version}")
     ffmpeg = find_ffmpeg()
     runtime = find_js_runtime()
     print(f"FFmpeg + ffprobe: {ffmpeg if ffmpeg else 'not found'}")
@@ -466,7 +466,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if not sys.stdin.isatty():
             parser.error("provide a URL or run without arguments in an interactive terminal")
-        print("\nUNIVERSAL DOWNLOADER\nCheck a link, then choose the original or another format.\nPaste several links to queue them, or type batch followed by a text-file path.\n")
+        print(f"\n{APP_NAME.upper()}\nCheck a link, then choose the original or another format.\nPaste several links to queue them, or type batch followed by a text-file path.\n")
         session_status = 0
         while True:
             try:

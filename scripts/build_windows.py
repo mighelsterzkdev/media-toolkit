@@ -78,7 +78,7 @@ def build(output: Path) -> Path:
         raise RuntimeError("Dependencies are not the tested release: " + "; ".join(issues))
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    name = f"universal-downloader-{__version__}-windows-x64"
+    name = f"media-toolkit-{__version__}-windows-x64"
     bundle = output / name
     archive = output / f"{name}.zip"
     if bundle.exists() or archive.exists():
@@ -108,7 +108,7 @@ def build(output: Path) -> Path:
         'exit /b %result%\n', encoding="utf-8",
     )
     (bundle / "READ-ME.txt").write_text(
-        f"Universal Downloader {__version__} — Windows x64\n\n"
+        f"Media Toolkit {__version__} — Windows x64\n\n"
         "1. Extract the entire ZIP into a writable folder. Keep _internal beside unidown.exe.\n"
         "2. Open start.cmd. No Python installation or administrator access is required.\n"
         "3. On first use, FFmpeg and Deno are downloaded directly from their publishers. Internet is required.\n"
@@ -117,7 +117,7 @@ def build(output: Path) -> Path:
         "From a terminal: unidown.exe --doctor | unidown.exe --version | unidown.exe --help\n"
         "Prepare tools without opening the menu: unidown.exe --install-tools\n"
         "To update, download and extract a newer complete release. Do not replace only the EXE.\n"
-        "Source, instructions and releases: https://github.com/mighelsterzkdev/universal-downloader\n"
+        "Source, instructions and releases: https://github.com/mighelsterzkdev/media-toolkit\n"
         "Third-party licenses and external tool source links are in licenses/.\n"
         "This release is unsigned; the SHA256SUMS.txt file verifies download integrity.\n",
         encoding="utf-8",
