@@ -48,7 +48,8 @@ def _alive(pid):
             return False
         os.kill(pid, 0)
         return True
-    except ProcessLookupError:
+    except (ProcessLookupError, FileNotFoundError):
+        # The process can exit between exists() and the procfs read.
         return False
 
 
