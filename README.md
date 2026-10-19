@@ -35,7 +35,7 @@ Downloads go into the extracted folder's `downloads` directory when launched thr
 
 ```powershell
 # Check the ZIP against the published checksum before extraction
-Get-FileHash .\universal-downloader-0.5.0-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\universal-downloader-0.6.0-windows-x64.zip -Algorithm SHA256
 
 # Prepare the external tools without opening the menu
 .\unidown.exe --install-tools
@@ -100,7 +100,7 @@ Animation is never silently converted to a still image. GIF re-encoding supports
 
 Video/audio extraction uses [yt-dlp](https://github.com/yt-dlp/yt-dlp), with additional image and page discovery. Direct media URLs do not have to end in a recognizable extension: response content and readable media determine what can be offered.
 
-Google image-result and redirect links are resolved to their underlying public source when that URL is exposed. Public pages can expose media through image metadata, image/video elements, and related media links. When several verified candidates are found, the app offers a numbered choice instead of silently saving a preview. A GIF found through a search result can therefore remain animated or be explicitly converted to MP4.
+Google image-result and redirect links are resolved to their underlying public source when that URL is exposed. Public pages can expose media through image metadata, image/video elements, responsive `srcset`/`picture` variants, and lazy image attributes. Immediate HTML refresh redirects are followed only on redirect shells; the app does not follow arbitrary related links. When several verified candidates are found, the app offers a numbered choice instead of silently saving a preview. A GIF found through a search result can therefore remain animated or be explicitly converted to MP4.
 
 Special cases include Twitter/X GIF posts, whose native animation is usually an MP4 rather than a GIF file, and TikTok `/music/...` links, which resolve to the exact tagged sound. A TikTok sound is not replaced by a video's mixed soundtrack or cover image.
 
@@ -143,6 +143,40 @@ Commands with a URL are noninteractive: they save the selected/default original 
 
 Quote URLs containing `&`. Type names are case-insensitive; `thumbnail` aliases `image`, and `jpeg` aliases `jpg`. Existing `--format video|audio|image` commands alias `--type`. Run `--help` for the complete interface. The portable EXE accepts the same download flags.
 
+## Link queues
+
+In the interactive session, paste several URLs separated by spaces on one line, or type `batch C:\path\to\links.txt` at the URL prompt. The queue shows its item count, lets you choose one output policy, and asks for confirmation before downloading. The normal single-link menu keeps working as before.
+
+For scripts, use a UTF-8 text file with one URL per line. Blank lines and lines starting with `#` are ignored; a UTF-8 BOM is accepted. All entries are validated before any network request. Duplicate URLs are processed once, in their original order. Files are limited to 1 MiB and 1,000 URL entries.
+
+```powershell
+# Download each link's default original without interactive prompts
+.\start.cmd --batch links.txt
+
+# Apply the same explicit conversion to compatible audio sources
+.\start.cmd --batch links.txt --type audio --convert mp3
+```
+
+The final summary distinguishes saved, existing, incompatible, and failed items. A requested type or conversion is never replaced by another kind of content. Pages with several media items require a selection; automatic queues report those links instead of guessing. A real failure produces a nonzero exit code, and Ctrl+C stops before the next item. Rerun the same file to reuse verified completed downloads and resume supported interrupted transfers.
+
+## Remembered preferences
+
+Explicit `--output`, `--max-height`, and `--max-size` values are remembered for later launches. The output folder is stored as an absolute path. Command-line values take precedence over saved settings; no saved file means the original defaults. A saved height applies to video/animation and does not block an audio or static-image download. An explicitly supplied height still uses the normal strict validation.
+
+```powershell
+# Configure a folder and size cap without downloading anything
+.\start.cmd --output "D:\Downloads" --max-size 100MiB --save-preferences
+
+# Inspect or reset saved settings
+.\start.cmd --show-preferences
+.\start.cmd --reset-preferences
+
+# Ignore saved settings for one command and do not change them
+.\start.cmd "https://example.com/image.gif" --no-preferences
+```
+
+Settings live in `preferences.json` inside the app's local state directory, alongside the download history. Only output folder and limits are saved. URLs, cookies, credentials, media types, and conversion choices are not stored as preferences. Choosing a format in one interactive download does not silently convert the next one.
+
 ## Existing files and download history
 
 Files are identified by their source, provider ID or canonical URL, asset role, and requested output settings. A matching title and ID from another source is not enough to count as an existing download.
@@ -155,7 +189,22 @@ The index lives outside media folders:
 - Linux/macOS: `$XDG_STATE_HOME/universal-downloader/downloads.sqlite3`, or `~/.local/state/universal-downloader/downloads.sqlite3`
 - Override the directory with `UNIDOWN_DATA_DIR` when needed.
 
-Deleting this index does not delete media, but prevents trusted reuse until a new completed download is recorded. Final outputs are staged before publication, and existing files are preserved under simultaneous saves. Normal success, errors, and Ctrl+C clean temporary work. A forced process termination may leave a private temporary directory, without exposing that partial file as a completed output.
+Deleting this index does not delete media, but prevents trusted reuse until a new completed download is recorded. Final outputs are staged before publication, and existing files are preserved under simultaneous saves.
+
+## Interrupted downloads
+
+Supported HTTP transfers keep resumable work in the local state's `resume/` directory, outside the media folder. Paste the same link again with the same output settings to continue after a network interruption, Ctrl+C, or process restart. The page is inspected again to refresh source access.
+
+Before reusing partial bytes, the app checks the selected source URL, HTTP validators, and saved integrity checkpoints. Uncheckpointed bytes after a forced exit may be discarded before continuing. Changed, unverifiable, or unsupported sources restart safely. Servers may refuse continuation even when a previous partial exists. This is not a promise that every site or streaming protocol supports resume.
+
+Only a fully downloaded and validated result is published in the output folder. Completed work is cleaned after publication; resumable failures retain their private state. Concurrent processes cannot write the same work directory simultaneously. The existing size limit includes retained source bytes, and conversion continues from a verified completed source when possible.
+
+```powershell
+# Discard inactive partial work when you no longer need it
+.\start.cmd --clear-resume
+```
+
+This command clears the app's own interrupted work, keeps active downloads, and does not delete completed media or preferences. Without that command, trusted interrupted work remains available for continuation and occupies disk space in the local state directory. If local state is unavailable, downloads can still run with private temporary work and no continuation.
 
 ## Development and verification
 
@@ -173,7 +222,7 @@ Deleting this index does not delete media, but prevents trusted reuse until a ne
 .\.venv\Scripts\python.exe -B scripts/live_smoke.py --download --case direct-gif --output dist/live-media.json
 ```
 
-`constraints.txt` pins the dependency set tested by the Windows/Linux Python 3.10, 3.12, and 3.14 matrix. Adapter tests exercise the provider metadata on which the app relies. Local fixtures check original bytes and audio packet hashes, codecs and animation frames, media discovery, errors, size/height limits, cache verification, races and interrupted saves. They do not prove that every live website currently works.
+`constraints.txt` pins the dependency set tested by the Windows/Linux Python 3.10, 3.12, and 3.14 matrix. Adapter tests exercise the provider metadata on which the app relies. Local fixtures check original bytes and audio packet hashes, codecs and animation frames, media discovery, errors, size/height limits, cache verification, races, queues, preferences, and interrupted saves. Resume fixtures exercise actual HTTP Range requests across process restarts, changed source validators, and servers that ignore Range. They do not prove that every live website currently works.
 
 The separate **Live site smoke checks (manual)** workflow runs selected public examples on request and publishes a JSON report. It can inspect metadata only, or download and decode actual files and convert animated examples to MP4. Access restrictions, network conditions, removed examples, and site changes may cause failures; the report states exactly which URLs were checked.
 
@@ -184,11 +233,11 @@ Run on Windows x64 using a separate build environment:
 ```powershell
 python -B -m venv .tools/build-env
 .\.tools\build-env\Scripts\python.exe -B -m pip install -c constraints.txt -e . pyinstaller==6.22.3
-.\.tools\build-env\Scripts\python.exe -B scripts/build_windows.py --output dist/release
-.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/release/universal-downloader-0.5.0-windows-x64/unidown.exe --bootstrap
+.\.tools\build-env\Scripts\python.exe -B scripts/build_windows.py --output dist/release-0.6.0
+.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/release-0.6.0/universal-downloader-0.6.0-windows-x64/unidown.exe --bootstrap
 ```
 
-Use a new output directory for each build. The build produces the complete folder, a ZIP, and `SHA256SUMS.txt`. It checks the executable archive to exclude optional Mutagen and build-time PyInstaller modules. The verifier removes Python and external tools from PATH, checks the bundled executable, preserves local image/video originals, converts GIF animation to H.264 MP4, extracts original AAC audio, converts MP3, and verifies cached reuse. Its temporary download history is isolated from the user's history. The **Build portable Windows release** workflow builds and checks the same artifacts on tagged versions or manual runs; it does not publish a release automatically.
+Use a new output directory for each build. The build produces the complete folder, a ZIP, and `SHA256SUMS.txt`. It checks the executable archive to exclude optional Mutagen and build-time PyInstaller modules. The verifier removes Python and external tools from PATH, checks the bundled executable, preserves local image/video originals, converts GIF animation to H.264 MP4, extracts original AAC audio, converts MP3, verifies cached reuse, runs a link queue, checks remembered preferences, and terminates/restarts a real frozen HTTP download to verify continuation. Its temporary download history is isolated from the user's history. The **Build portable Windows release** workflow builds and checks the same artifacts on tagged versions or manual runs; it does not publish a release automatically.
 
 Keep `.venv/` and `.tools/` to avoid reinstalling source dependencies. Downloaded media, generated builds, caches, and package metadata are excluded from Git. Launchers and documented Python commands use `-B` to avoid source bytecode caches.
 

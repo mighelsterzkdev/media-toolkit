@@ -6,16 +6,70 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import re
+import struct
 import subprocess
 import tempfile
 import threading
+import time
 
 from PIL import Image
 
 
 class _QuietHandler(SimpleHTTPRequestHandler):
+    resumed_offsets = []
+
     def log_message(self, *args):
         pass
+
+    def _resumable(self, *, head=False):
+        path = Path(self.directory) / "resume.mp4"
+        size = path.stat().st_size
+        match = re.fullmatch(r"bytes=(\d+)-(\d*)", self.headers.get("Range", ""))
+        start = int(match[1]) if match else 0
+        end = min(int(match[2]), size - 1) if match and match[2] else size - 1
+        if start >= size or end < start:
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{size}")
+            self.end_headers()
+            return
+        self.send_response(206 if match else 200)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("ETag", '"portable-resume-fixture-v1"')
+        self.send_header("Accept-Ranges", "bytes")
+        if match:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.resumed_offsets.append(start)
+        self.end_headers()
+        if head:
+            return
+        try:
+            with path.open("rb") as source:
+                source.seek(start)
+                remaining = end - start + 1
+                while remaining > 0:
+                    chunk = source.read(min(16_384, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+                    remaining -= len(chunk)
+                    time.sleep(0.005)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+
+    def do_HEAD(self):
+        if self.path == "/resume.mp4":
+            self._resumable(head=True)
+        else:
+            super().do_HEAD()
+
+    def do_GET(self):
+        if self.path == "/resume.mp4":
+            self._resumable()
+        else:
+            super().do_GET()
 
 
 def verify(executable: Path, *, bootstrap: bool = False) -> None:
@@ -28,9 +82,9 @@ def verify(executable: Path, *, bootstrap: bool = False) -> None:
         root = Path(temporary)
         environment["UNIDOWN_DATA_DIR"] = str(root / "history")
 
-        def run(*arguments):
+        def run(*arguments, expected=0):
             process = subprocess.run([str(executable), *arguments], cwd=root, env=environment, capture_output=True, text=True, encoding="utf-8", timeout=300)
-            if process.returncode:
+            if process.returncode != expected:
                 raise RuntimeError(f"Portable command failed ({process.returncode}): {' '.join(arguments)}\n{process.stdout}\n{process.stderr}")
             return process.stdout
 
@@ -49,6 +103,11 @@ def verify(executable: Path, *, bootstrap: bool = False) -> None:
             [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=48x32:r=10", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t", "0.5", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(video_fixture)],
             capture_output=True, timeout=30, check=True,
         )
+        # A valid MP4 'free' box gives the interruption test enough data to
+        # preserve a real partial file without generating a long video.
+        resume_fixture = root / "resume.mp4"
+        padding_size = 8 * 1024 * 1024
+        resume_fixture.write_bytes(video_fixture.read_bytes() + struct.pack("!I", padding_size) + b"free" + bytes(padding_size - 8))
 
         def probe(path):
             result = subprocess.run([str(ffprobe), "-v", "error", "-show_streams", "-of", "json", str(path)], capture_output=True, text=True, timeout=30, check=True)
@@ -94,11 +153,67 @@ def verify(executable: Path, *, bootstrap: bool = False) -> None:
             mp3s = list(mp3_output.glob("*.mp3"))
             if len(mp3s) != 1 or [stream.get("codec_name") for stream in probe(mp3s[0])] != ["mp3"]:
                 raise RuntimeError("Portable MP3 conversion did not produce an audio-only MP3 file.")
+
+            # Batch uses one explicit policy and stores each original in full.
+            batch_output = root / "batch"
+            batch_file = root / "links.txt"
+            batch_file.write_text(f"# Representative media\n{url}\n{media_url}\n{url}\n", encoding="utf-8-sig")
+            batch_log = run("--batch", str(batch_file), "--output", str(batch_output), "--no-preferences")
+            if len(list(batch_output.glob("*.gif"))) != 1 or len(list(batch_output.glob("*.mp4"))) != 1:
+                raise RuntimeError("The portable queue did not save its two distinct original assets.")
+            print(batch_log.strip(), flush=True)
+
+            preference_output = root / "remembered"
+            run("--output", str(preference_output), "--max-size", "2MiB", "--save-preferences")
+            preferences = run("--show-preferences")
+            if str(preference_output) not in preferences and str(preference_output).replace("\\", "\\\\") not in preferences:
+                raise RuntimeError("The portable app did not remember its output folder.")
+            run("--reset-preferences")
+
+            # Terminate an actual frozen process, then reopen the same link.
+            resume_url = f"http://127.0.0.1:{server.server_port}/resume.mp4"
+            resume_output = root / "resumed"
+            arguments = [str(executable), resume_url, "--type", "video", "--output", str(resume_output), "--no-preferences"]
+            process = subprocess.Popen(arguments, cwd=root, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
+            partial = None
+            try:
+                deadline = time.monotonic() + 45
+                while process.poll() is None and time.monotonic() < deadline:
+                    candidates = list((root / "history").rglob("*.part"))
+                    partial = None
+                    for candidate in candidates:
+                        try:
+                            state_file = candidate.parent.parent / "state.json"
+                            state = json.loads(state_file.read_text(encoding="utf-8"))
+                            recorded = state.get("partials", {}).get(candidate.name, {}).get("size", 0)
+                            if recorded > 0 and candidate.stat().st_size >= 131_072:
+                                partial = candidate
+                                break
+                        except (OSError, ValueError):
+                            continue
+                    if partial is not None:
+                        break
+                    time.sleep(0.025)
+                if partial is None:
+                    raise RuntimeError("The portable process did not create a resumable partial download.")
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                stdout, stderr = process.communicate(timeout=20)
+            state = json.loads((partial.parent.parent / "state.json").read_text(encoding="utf-8"))
+            saved_offset = state["partials"][partial.name]["size"]
+            _QuietHandler.resumed_offsets.clear()
+            print(run(*arguments[1:]).strip(), flush=True)
+            resumed = list(resume_output.glob("*.mp4"))
+            if saved_offset not in _QuietHandler.resumed_offsets or len(resumed) != 1 or resumed[0].read_bytes() != resume_fixture.read_bytes():
+                raise RuntimeError("The portable restart did not resume from its saved offset with exact original bytes.")
+            if any((root / "history" / "resume").rglob("*.part")):
+                raise RuntimeError("The portable restart left its completed partial download behind.")
         finally:
             server.shutdown()
             server.server_close()
             worker.join(timeout=5)
-    print("Portable checks passed: isolated tool discovery, exact image/video originals, animated MP4, AAC extraction, MP3 conversion and cached repeat.", flush=True)
+    print("Portable checks passed: isolated tools, exact originals, conversions, cached repeat, queue, preferences and process-restart HTTP resume.", flush=True)
 
 
 def main() -> int:

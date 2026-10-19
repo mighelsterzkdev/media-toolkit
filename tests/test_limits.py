@@ -113,6 +113,12 @@ class LimitSelectionTests(unittest.TestCase):
 
 class _Handler(SimpleHTTPRequestHandler):
     requests = []
+    unknown_size = False
+
+    def send_header(self, keyword, value):
+        if self.unknown_size and keyword.lower() == "content-length":
+            return
+        return super().send_header(keyword, value)
 
     def do_GET(self):
         self.requests.append(self.path)
@@ -167,6 +173,7 @@ class LimitDownloadTests(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
         _Handler.requests.clear()
+        _Handler.unknown_size = False
 
     def inspected(self, path="/video.mp4", *, declared_size=None, declared_height=72):
         url = self.base + path
@@ -253,6 +260,7 @@ class LimitDownloadTests(unittest.TestCase):
         self.assertLessEqual(result.path.stat().st_size, limit)
 
     def test_real_unknown_separate_sizes_abort_on_combined_budget(self):
+        _Handler.unknown_size = True
         inspected = self.separate_streams(known=False)
         limit = sum((self.root / name).stat().st_size for name in ("high.mp4", "audio.m4a")) - 1
         self.assertGreater(limit, max((self.root / name).stat().st_size for name in ("high.mp4", "audio.m4a")))

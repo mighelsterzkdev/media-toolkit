@@ -5,7 +5,9 @@ from __future__ import annotations
 from hashlib import sha256
 from html.parser import HTMLParser
 import json
+import math
 from pathlib import Path
+import re
 import time
 from urllib.parse import unquote, urljoin, urlsplit
 
@@ -22,6 +24,84 @@ from .urls import google_target, validate_url
 MAX_PAGE_BYTES = 4 * 1024 * 1024
 MAX_CANDIDATES = 12
 MAX_DISCOVERY_BYTES = 64 * 1024 * 1024
+_SPACE = " \t\r\n\f"
+
+
+def srcset_candidates(value: str) -> list[tuple[str, float, str]]:
+    """Read HTML srcset tokens without splitting commas inside asset URLs.
+
+    Widths are intrinsic pixels; densities are relative variants. Downloading
+    prefers the largest declaration rather than emulating a browser viewport.
+    """
+    found = []
+    position = 0
+    while position < len(value) and len(found) < 64:
+        while position < len(value) and value[position] in _SPACE + ",":
+            position += 1
+        start = position
+        while position < len(value) and value[position] not in _SPACE:
+            position += 1
+        url = value[start:position]
+        descriptors = ""
+        if url.endswith(","):
+            url = url.rstrip(",")
+        else:
+            start = position
+            while position < len(value) and value[position] != ",":
+                position += 1
+            descriptors = value[start:position].strip()
+        position += 1
+        if not url or url.lower().startswith(("data:", "javascript:", "file:", "blob:")):
+            continue
+        if not descriptors:
+            found.append((url, 1.0, "x"))
+        elif re.fullmatch(r"[0-9]+w", descriptors):
+            width = float(descriptors[:-1])
+            if math.isfinite(width) and width > 0:
+                found.append((url, width, "w"))
+        elif re.fullmatch(r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?x", descriptors):
+            density = float(descriptors[:-1])
+            if math.isfinite(density) and density > 0:
+                found.append((url, density, "x"))
+    return found
+
+
+def _usable_image_url(url) -> bool:
+    if not isinstance(url, str) or not url or any(character.isspace() for character in url):
+        return False
+    if url.lower().startswith(("data:", "javascript:", "file:", "blob:")):
+        return False
+    try:
+        basename = Path(urlsplit(url).path).name.lower()
+    except ValueError:
+        return False
+    return not re.fullmatch(r"(?:transparent|spacer|blank|loading|placeholder)(?:[-_.][^/]*)?\.(?:gif|png|jpe?g|webp)", basename)
+
+
+def image_variants(attrs: dict, sources=()) -> tuple[str, ...]:
+    """One DOM image is one asset, with declared resolution/format fallbacks."""
+    width = attrs.get("width") or ""
+    base = float(width) if re.fullmatch(r"[1-9][0-9]{0,8}", width) else 1.0
+    ranked = []
+    width_descriptors = False
+    original = attrs.get("data-original")
+    if _usable_image_url(original):
+        ranked.append((original, math.inf))
+    for source in (*sources, attrs):
+        media_type = (source.get("type") or "").split(";", 1)[0].lower()
+        if media_type and media_type not in ("image/gif", "image/jpeg", "image/jpg", "image/png", "image/webp", "image/avif", "image/bmp", "image/tiff", "image/x-icon"):
+            continue
+        value = source.get("data-srcset") or source.get("data-lazy-srcset") or source.get("data-original-srcset") or source.get("srcset") or ""
+        for url, size, unit in srcset_candidates(value):
+            if _usable_image_url(url):
+                width_descriptors |= unit == "w"
+                ranked.append((url, size if unit == "w" else size * base))
+    for key in ("data-src", "data-lazy-src", "src"):
+        if _usable_image_url(attrs.get(key)):
+            # With w descriptors, src is a fallback rather than a candidate
+            # whose CSS display width could outrank the declared source set.
+            ranked.append((attrs[key], 0 if width_descriptors else base))
+    return tuple(dict.fromkeys(url for url, _ in sorted(ranked, key=lambda item: item[1], reverse=True)))[:6]
 
 
 def _image_signature(data: bytes) -> bool:
@@ -45,10 +125,13 @@ class PageMedia(HTMLParser):
         self.title = ""
         self.base = None
         self.redirect = None
+        self.refresh = False
         self._title = False
         self._script = None
         self._json = []
         self._container = None
+        self._picture = None
+        self.variants = {}
 
     def add(self, url, kind, *, primary=True, cover=False):
         if isinstance(url, str) and url:
@@ -64,7 +147,7 @@ class PageMedia(HTMLParser):
             self.base = attrs.get("href")
         elif tag == "meta":
             name = (attrs.get("property") or attrs.get("name") or "").lower()
-            content = attrs.get("content", "")
+            content = attrs.get("content") or ""
             if name in ("og:title", "twitter:title") and content:
                 self.title = content
             elif name in ("og:video", "og:video:url", "og:video:secure_url", "twitter:player:stream"):
@@ -73,10 +156,11 @@ class PageMedia(HTMLParser):
                 self.add(content, "audio")
             elif name in ("og:image", "og:image:url", "og:image:secure_url", "twitter:image", "twitter:image:src"):
                 self.add(content, "image", primary=False, cover=True)
-            elif attrs.get("http-equiv", "").lower() == "refresh":
-                value = content.partition(";")[2].strip()
-                if value.lower().startswith("url="):
-                    self.redirect = value[4:].strip(" '\"")
+            elif (attrs.get("http-equiv") or "").lower() == "refresh":
+                match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*;\s*url\s*=\s*(.*?)\s*", content, re.IGNORECASE)
+                if match and float(match[1]) <= 1:
+                    self.redirect = match[2].strip(" '\"")
+                    self.refresh = True
         elif tag in ("video", "audio"):
             self._container = tag
             self.add(attrs.get("src"), tag)
@@ -84,24 +168,45 @@ class PageMedia(HTMLParser):
                 self.add(attrs.get("poster"), "image", primary=False, cover=True)
         elif tag == "source" and self._container:
             self.add(attrs.get("src"), self._container)
+        elif tag == "picture":
+            self._picture = []
+        elif tag == "source" and self._picture is not None:
+            if len(self._picture) < MAX_CANDIDATES:
+                self._picture.append(attrs)
         elif tag == "img":
             try:
                 tiny = int(attrs.get("width", "999")) <= 64 and int(attrs.get("height", "999")) <= 64
-            except ValueError:
+            except (TypeError, ValueError):
                 tiny = False
-            if not tiny and "logo" not in (attrs.get("alt", "") + " " + attrs.get("class", "")).lower():
-                lazy = attrs.get("data-src") or attrs.get("data-original")
-                if lazy and (lazy.lower().startswith(("data:", "javascript:", "file:")) or any(character.isspace() for character in lazy)):
-                    lazy = None
-                self.add(lazy or attrs.get("src"), "image", primary=False)
-        elif tag == "link" and attrs.get("rel", "").lower() == "image_src":
+            sources = self._picture or ()
+            conditional = {}
+            unconditional = []
+            for source in sources:
+                media = (source.get("media") or "").strip()
+                if media and media.lower() != "all":
+                    conditional.setdefault(media, []).append(source)
+                else:
+                    unconditional.append(source)
+            groups = [image_variants(attrs, unconditional)]
+            # Media conditions can change the crop/content (art direction),
+            # not just resolution. Without a viewport, expose those branches
+            # rather than silently replacing the fallback image with a crop.
+            groups.extend(image_variants({"width": attrs.get("width")}, branch) for branch in conditional.values())
+            responsive = any(attrs.get(key) for key in ("srcset", "data-srcset", "data-lazy-srcset", "data-original-srcset", "data-original", "data-src", "data-lazy-src")) or bool(self._picture)
+            if (not tiny or responsive) and "logo" not in ((attrs.get("alt") or "") + " " + (attrs.get("class") or "")).lower():
+                for variants in groups:
+                    if variants:
+                        self.add(variants[0], "image", primary=False)
+                        if (variants[0], "image") in self.images:
+                            self.variants[variants[0]] = variants
+        elif tag == "link" and (attrs.get("rel") or "").lower() == "image_src":
             self.add(attrs.get("href"), "image", primary=False)
-        elif tag == "script" and attrs.get("type", "").lower() == "application/ld+json":
+        elif tag == "script" and (attrs.get("type") or "").lower() == "application/ld+json":
             self._script = True
             self._json = []
         elif tag == "a":
             # Google's short image links sometimes end at an HTML redirect.
-            href = attrs.get("href", "")
+            href = attrs.get("href") or ""
             if "/imgres?" in href and "imgurl=" in href and not self.redirect:
                 self.redirect = href
 
@@ -116,6 +221,8 @@ class PageMedia(HTMLParser):
             self._title = False
         elif tag in ("video", "audio"):
             self._container = None
+        elif tag == "picture":
+            self._picture = None
         elif tag == "script" and self._script:
             self._script = None
             try:
@@ -206,7 +313,9 @@ def discover(downloader, url: str, *, image_only=False, _seen=None, _budget=None
     parser = PageMedia()
     parser.feed(bytes(data).decode("utf-8", errors="replace"))
     base = urljoin(final, parser.base) if parser.base else final
-    if parser.redirect and urlsplit(url).hostname in ("images.app.goo.gl", "share.google"):
+    # An immediate refresh on a redirect shell is navigation. Never let it
+    # replace declared primary media or an independent image on a real page.
+    if parser.redirect and (urlsplit(url).hostname in ("images.app.goo.gl", "share.google") or parser.refresh and not (parser.candidates or parser.images)):
         redirect = _asset_url(base, parser.redirect)
         if redirect:
             return discover(downloader, redirect, image_only=image_only, _seen=seen, _budget=budget)
@@ -221,7 +330,8 @@ def discover(downloader, url: str, *, image_only=False, _seen=None, _budget=None
             continue
         candidate = _asset_url(base, value)
         if candidate and candidate not in candidate_urls and candidate != final:
-            candidates.append((candidate, kind))
+            variants = tuple(dict.fromkeys(filter(None, (_asset_url(base, variant) for variant in parser.variants.get(value, (value,))))))
+            candidates.append((candidate, kind, variants))
             candidate_urls.add(candidate)
             if len(candidates) >= MAX_CANDIDATES:
                 break
@@ -232,11 +342,26 @@ def discover(downloader, url: str, *, image_only=False, _seen=None, _budget=None
     assets = []
     failures = []
     has_primary = bool(parser.candidates) and not image_only
-    for candidate, kind in candidates[:MAX_CANDIDATES]:
+    for candidate, kind, variants in candidates[:MAX_CANDIDATES]:
         if budget[0] <= 0 or budget[1] >= 24 or time.monotonic() >= budget[2]:
             break
         try:
-            found = discover(downloader, candidate, image_only=image_only, _seen=set(seen), _budget=budget)
+            if kind == "image":
+                found = None
+                for variant in variants:
+                    if budget[0] <= 0 or budget[1] >= 24 or time.monotonic() >= budget[2]:
+                        break
+                    try:
+                        found = discover(downloader, variant, image_only=image_only, _seen=set(seen), _budget=budget)
+                    except (DownloadError, RequestError, YtDlpError, OSError) as error:
+                        failures.append(error if isinstance(error, DownloadError) else extraction_error(error))
+                        continue
+                    if found:
+                        break
+                if not found:
+                    continue
+            else:
+                found = discover(downloader, candidate, image_only=image_only, _seen=set(seen), _budget=budget)
             if found is None:
                 if kind == "image":
                     continue

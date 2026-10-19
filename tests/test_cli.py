@@ -1,18 +1,27 @@
 import contextlib
 import io
+import os
+import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
-from universal_downloader.cli import _parse_size, main
+from universal_downloader.cli import _parse_size, _Progress, main
 from universal_downloader.downloader import DownloadError, DownloadResult
 from universal_downloader.inspection import MediaInspection
+from universal_downloader.preferences import load_preferences, preferences_path, save_preferences
 
 
 class CliTests(unittest.TestCase):
     def setUp(self):
+        self.preferences_folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.preferences_folder.cleanup)
+        environment = patch.dict(os.environ, {"UNIDOWN_DATA_DIR": self.preferences_folder.name})
+        environment.start()
+        self.addCleanup(environment.stop)
         encoder = patch("universal_downloader.conversions.find_ffmpeg", return_value=Path("."))
         encoder.start()
         self.addCleanup(encoder.stop)
@@ -491,6 +500,192 @@ class CliTests(unittest.TestCase):
         self.assertEqual(main(["--doctor"]), 1)
         self.assertIn("unidown.exe --install-tools", self.output.getvalue())
         self.assertNotIn("Run install.cmd", self.output.getvalue())
+
+    def batch_file(self, contents):
+        path = Path(self.preferences_folder.name) / "links.txt"
+        path.write_text(contents, encoding="utf-8-sig")
+        return str(path)
+
+    def queue_inspections(self, *, kinds=("video",)):
+        self.inspect_media.side_effect = lambda url, **kwargs: MediaInspection(url, {"title": "Queue item"}, kinds)
+
+    def test_batch_validates_all_entries_before_network_and_rejects_positional_url(self):
+        filename = self.batch_file("https://example.com/a\nnot a URL\n")
+        self.assertEqual(main(["--batch", filename]), 1)
+        self.inspect_media.assert_not_called()
+        self.download.assert_not_called()
+        with self.assertRaises(SystemExit) as error:
+            main([self.inspected.url, "--batch", filename])
+        self.assertEqual(error.exception.code, 2)
+
+    def test_automatic_batch_deduplicates_and_summarizes_saved_existing_and_failures(self):
+        filename = self.batch_file("# queue\nhttps://example.com/a\nhttps://example.com/b\nhttps://example.com/a\nhttps://example.com/c\n")
+        self.queue_inspections()
+        self.download.side_effect = [DownloadResult("a", Path("a.mp4")), DownloadResult("b", Path("b.mp4"), True), DownloadError("Network unavailable")]
+        self.assertEqual(main(["--batch", filename]), 1)
+        self.assertEqual(self.inspect_media.call_count, 3)
+        self.assertEqual([call.args[0].url for call in self.download.call_args_list], ["https://example.com/a", "https://example.com/b", "https://example.com/c"])
+        self.assertIn("completed 1 | already 1 | failed 1 | skipped 0", self.output.getvalue())
+
+    def test_queue_skips_incompatible_content_but_counts_network_failures(self):
+        filename = self.batch_file("https://example.com/image\nhttps://example.com/audio\nhttps://example.com/unavailable")
+        self.inspect_media.side_effect = [MediaInspection("https://example.com/image", {"title": "Image"}, ("image",)), MediaInspection("https://example.com/audio", {"title": "Audio"}, ("audio",)), DownloadError("Connection failed")]
+        self.assertEqual(main(["--batch", filename, "--convert", "mp3"]), 1)
+        self.download.assert_called_once()
+        self.assertEqual(self.download.call_args.args[0].media_format, "audio")
+        self.assertEqual(self.download.call_args.args[0].convert_to, "mp3")
+        self.assertTrue(all(call.kwargs["media_format"] is None for call in self.inspect_media.call_args_list))
+        self.assertIn("completed 1 | already 0 | failed 1 | skipped 1", self.output.getvalue())
+
+    def test_interactive_pasted_queue_requires_confirmation_and_downloads_nothing_when_declined(self):
+        status, _ = self.menu(["https://example.com/a https://example.com/b", "", "n", ""])
+        self.assertEqual(status, 0)
+        self.inspect_media.assert_not_called()
+        self.download.assert_not_called()
+        self.assertIn("Queue: 2 links", self.output.getvalue())
+
+    def test_interactive_batch_command_selects_original_once_for_the_queue(self):
+        filename = self.batch_file("https://example.com/a\nhttps://example.com/b")
+        self.queue_inspections()
+        status, user_input = self.menu([f'batch "{filename}"', "", "y", ""])
+        self.assertEqual(status, 0)
+        self.assertEqual(user_input.call_count, 4)
+        self.assertEqual(self.download.call_count, 2)
+        self.assertTrue(all(call.args[0].convert_to is None for call in self.download.call_args_list))
+
+    def test_interactive_queue_custom_format_is_selected_once_and_inspection_is_reused(self):
+        self.queue_inspections(kinds=("video", "audio"))
+        status, user_input = self.menu(["https://example.com/a https://example.com/b", "2", "2", "2", "yes", ""])
+        self.assertEqual(status, 0)
+        self.assertEqual(user_input.call_count, 6)
+        self.assertEqual(self.inspect_media.call_count, 2)
+        self.assertEqual(self.download.call_count, 2)
+        self.assertTrue(all(call.args[0].media_format == "audio" and call.args[0].convert_to == "mp3" for call in self.download.call_args_list))
+
+    def test_custom_queue_uses_first_verifiable_item_and_counts_prior_failure_once(self):
+        urls = ["https://example.com/unavailable", "https://example.com/good", "https://example.com/next"]
+        self.inspect_media.side_effect = [DownloadError("First link is unavailable"), *[MediaInspection(url, {"title": "Good audio"}, ("video", "audio")) for url in urls[1:]]]
+        status, answers = self.menu([" ".join(urls), "2", "2", "2", "yes", ""])
+        self.assertEqual(status, 1)
+        self.assertEqual(answers.call_count, 6)
+        self.assertEqual([call.args[0] for call in self.inspect_media.call_args_list], urls)
+        self.assertEqual([call.args[0].url for call in self.download.call_args_list], urls[1:])
+        self.assertTrue(all(call.args[0].media_format == "audio" and call.args[0].convert_to == "mp3" for call in self.download.call_args_list))
+        self.assertIn("completed 2 | already 0 | failed 1 | skipped 0", self.output.getvalue())
+        self.assertEqual(self.errors.getvalue().count("First link is unavailable"), 1)
+
+    def test_custom_queue_all_preflight_failures_report_summary_without_downloading(self):
+        self.inspect_media.side_effect = [DownloadError("First unavailable"), DownloadError("Second unavailable")]
+        status, answers = self.menu(["https://example.com/a https://example.com/b", "2", ""])
+        self.assertEqual(status, 1)
+        self.assertEqual(answers.call_count, 3)
+        self.assertEqual(self.inspect_media.call_count, 2)
+        self.download.assert_not_called()
+        self.assertIn("completed 0 | already 0 | failed 2 | skipped 0", self.output.getvalue())
+
+    def test_canceling_custom_queue_after_failed_preflight_never_downloads(self):
+        self.inspect_media.side_effect = [DownloadError("First unavailable"), MediaInspection("https://example.com/good", {"title": "Good"}, ("video", "audio"))]
+        status, _ = self.menu(["https://example.com/a https://example.com/good https://example.com/later", "2", "0", ""])
+        self.assertEqual(status, 0)
+        self.assertEqual(self.inspect_media.call_count, 2)
+        self.download.assert_not_called()
+
+    def test_automatic_queue_never_silently_selects_an_ambiguous_page(self):
+        filename = self.batch_file(self.inspected.url)
+        self.page_with_assets()
+        self.assertEqual(main(["--batch", filename]), 1)
+        self.download.assert_not_called()
+        self.assertIn("--item NUMBER", self.errors.getvalue())
+
+    def test_interrupting_queue_never_inspects_or_downloads_later_links(self):
+        filename = self.batch_file("https://example.com/a\nhttps://example.com/b")
+        self.queue_inspections()
+        self.download.side_effect = KeyboardInterrupt
+        self.assertEqual(main(["--batch", filename]), 130)
+        self.download.assert_called_once()
+        self.inspect_media.assert_called_once()
+        self.assertIn("skipped 2", self.output.getvalue())
+
+    def test_failed_queue_status_survives_end_of_interactive_session(self):
+        self.queue_inspections()
+        self.download.side_effect = DownloadError("Network failed")
+        for ending in ("", EOFError):
+            with self.subTest(ending=ending):
+                status, _ = self.menu(["https://example.com/a https://example.com/b", "", "y", ending])
+                self.assertEqual(status, 1)
+
+    def test_explicit_output_and_limits_are_remembered_without_an_extra_prompt(self):
+        path = Path(self.preferences_folder.name) / "media"
+        self.assertEqual(main([self.inspected.url, "--output", str(path), "--max-height", "720", "--max-size", "1MB"]), 0)
+        self.assertEqual(load_preferences(), {"output": str(path.resolve()), "max_height": 720, "max_size": 1_000_000})
+        self.assertEqual(main([self.inspected.url]), 0)
+        request = self.download.call_args.args[0]
+        self.assertEqual(request.output_dir, path.resolve())
+        self.assertEqual(request.max_height, 720)
+        self.assertEqual(request.max_size, 1_000_000)
+
+    def test_saved_height_is_not_applied_to_audio_or_still_images(self):
+        save_preferences({"max_height": 720, "max_size": 1024})
+        for kind in ("audio", "image"):
+            with self.subTest(kind=kind):
+                self.inspect_media.return_value = MediaInspection(self.inspected.url, {"title": "Example"}, (kind,))
+                self.assertEqual(main([self.inspected.url]), 0)
+                self.assertIsNone(self.download.call_args.args[0].max_height)
+                self.assertEqual(self.download.call_args.args[0].max_size, 1024)
+        self.assertIn("Saved height limit does not apply", self.output.getvalue())
+
+    def test_no_preferences_skips_reading_and_does_not_modify_saved_settings(self):
+        save_preferences({"max_height": 720, "max_size": 1024})
+        original = preferences_path().read_bytes()
+        with patch("universal_downloader.cli.load_preferences") as reader, patch("universal_downloader.cli.save_preferences") as writer:
+            self.assertEqual(main([self.inspected.url, "--no-preferences", "--output", "other"]), 0)
+            reader.assert_not_called()
+            writer.assert_not_called()
+        self.assertIsNone(self.download.call_args.args[0].max_height)
+        self.assertIsNone(self.download.call_args.args[0].max_size)
+        self.assertEqual(preferences_path().read_bytes(), original)
+
+    def test_save_show_and_reset_preferences_are_standalone_commands(self):
+        self.assertEqual(main(["--save-preferences", "--max-height", "720"]), 0)
+        self.assertEqual(main(["--show-preferences"]), 0)
+        self.assertIn("Max height: 720", self.output.getvalue())
+        self.assertEqual(main(["--reset-preferences"]), 0)
+        self.assertEqual(load_preferences(), {})
+        self.inspect_media.assert_not_called()
+        self.download.assert_not_called()
+
+    def test_automatic_preference_write_error_never_blocks_a_download(self):
+        with patch("universal_downloader.cli.save_preferences", side_effect=DownloadError("Preferences unavailable. Use --no-preferences.")):
+            self.assertEqual(main([self.inspected.url, "--output", "media"]), 0)
+            self.download.assert_called_once()
+            self.assertIn("--no-preferences", self.errors.getvalue())
+            self.assertEqual(main(["--save-preferences"]), 1)
+
+    def test_corrupt_preferences_fall_back_to_defaults_for_regular_downloads(self):
+        preferences_path().write_text("not JSON", encoding="utf-8")
+        self.assertEqual(main([self.inspected.url]), 0)
+        self.assertEqual(self.download.call_args.args[0].output_dir, Path("downloads"))
+        self.assertIn("--reset-preferences", self.errors.getvalue())
+
+    def test_resume_events_do_not_expose_internal_partial_paths(self):
+        progress = _Progress()
+        progress({"status": "resuming", "filename": "private-internal-path"})
+        progress({"status": "resume_saved", "filename": "private-internal-path"})
+        self.assertIn("Resuming...", self.output.getvalue())
+        self.assertIn("Paste the same link to continue", self.output.getvalue())
+        self.assertNotIn("private-internal-path", self.output.getvalue())
+
+    def test_clear_resume_is_isolated_and_calls_only_explicit_cleanup(self):
+        cleanup = Mock(return_value=3)
+        with patch.dict("sys.modules", {"universal_downloader.resume": SimpleNamespace(clear_resume=cleanup)}):
+            self.assertEqual(main(["--clear-resume"]), 0)
+        cleanup.assert_called_once_with()
+        self.assertIn("Cleared 3 inactive partial downloads. Active downloads were kept.", self.output.getvalue())
+        self.inspect_media.assert_not_called()
+        self.download.assert_not_called()
+        self.assertFalse(preferences_path().exists())
+        with self.assertRaises(SystemExit):
+            main([self.inspected.url, "--clear-resume"])
 
 
 if __name__ == "__main__":

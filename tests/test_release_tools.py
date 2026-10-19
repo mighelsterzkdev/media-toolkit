@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
 
-from scripts import build_windows, install_tools
+from scripts import build_windows, install_tools, portable_entry
 from universal_downloader.compatibility import TESTED_VERSIONS, compatibility_issues
 from universal_downloader import dependencies
 
@@ -38,6 +38,18 @@ class ReleaseCompatibilityTests(unittest.TestCase):
 
 
 class PortableToolTests(unittest.TestCase):
+    def test_standalone_settings_and_cleanup_do_not_download_runtime_tools(self):
+        for arguments in (("--show-preferences",), ("--reset-preferences",), ("--output", "folder", "--save-preferences"), ("--clear-resume",), ("--doctor",)):
+            with self.subTest(arguments=arguments), patch.object(portable_entry.sys, "argv", ["unidown.exe", *arguments]), patch.object(portable_entry, "compatibility_issues", return_value=[]), patch.object(portable_entry, "find_ffmpeg", return_value=None), patch.object(portable_entry, "find_js_runtime", return_value=None), patch.object(portable_entry, "install_tools") as install, patch.object(portable_entry, "main", return_value=0) as cli:
+                self.assertEqual(portable_entry.portable_main(), 0)
+                install.assert_not_called()
+                cli.assert_called_once()
+
+    def test_portable_media_command_still_prepares_missing_runtime(self):
+        with patch.object(portable_entry.sys, "argv", ["unidown.exe", "https://example.com/video", "--save-preferences"]), patch.object(portable_entry, "compatibility_issues", return_value=[]), patch.object(portable_entry, "find_ffmpeg", return_value=None), patch.object(portable_entry, "install_tools", return_value=0) as install, patch.object(portable_entry, "main", return_value=0):
+            self.assertEqual(portable_entry.portable_main(), 0)
+            install.assert_called_once()
+
     def test_repacked_archive_excludes_downloaded_tools_and_user_media(self):
         with tempfile.TemporaryDirectory(prefix="unidown-archive-test-") as temporary:
             root = Path(temporary)

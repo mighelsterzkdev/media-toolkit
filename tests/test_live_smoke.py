@@ -57,6 +57,29 @@ class LiveMediaValidationTests(unittest.TestCase):
             self.assertEqual(result["status"], "failed")
             self.assertIn("original image bytes changed", result["error"])
 
+    def test_wrong_inspected_dimensions_fail_before_downloading_a_responsive_image(self):
+        with tempfile.TemporaryDirectory(prefix="unidown-smoke-test-") as temporary:
+            image = Path(temporary) / "fixture.png"
+            Image.new("RGB", (8, 8), "red").save(image)
+            inspected = MediaInspection("https://example.com/responsive", {"title": "Image"}, ("image",), image_data=image.read_bytes())
+            with patch("universal_downloader.downloader.inspect_media", return_value=inspected), patch("universal_downloader.downloader.download") as downloader:
+                result = check_case({"name": "fixture", "url": inspected.url, "kind": "image", "width": 16, "height": 8}, save=True)
+            self.assertEqual(result["status"], "failed")
+            self.assertIn("inspected width", result["error"])
+            downloader.assert_not_called()
+
+    def test_downloaded_dimensions_are_decoded_and_checked_again(self):
+        with tempfile.TemporaryDirectory(prefix="unidown-smoke-test-") as temporary:
+            expected = Path(temporary) / "expected.png"
+            downloaded = Path(temporary) / "downloaded.png"
+            Image.new("RGB", (8, 8), "red").save(expected)
+            Image.new("RGB", (16, 8), "red").save(downloaded)
+            inspected = MediaInspection("https://example.com/responsive", {"title": "Image"}, ("image",), image_data=expected.read_bytes())
+            with patch("universal_downloader.downloader.inspect_media", return_value=inspected), patch("universal_downloader.downloader.download", return_value=DownloadResult("Image", downloaded)):
+                result = check_case({"name": "fixture", "url": inspected.url, "kind": "image", "width": 8, "height": 8}, save=True)
+            self.assertEqual(result["status"], "failed")
+            self.assertIn("decoded width", result["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

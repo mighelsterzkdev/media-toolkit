@@ -18,6 +18,7 @@ CASES = (
     {"name": "direct-gif", "url": "https://upload.wikimedia.org/wikipedia/commons/2/2c/Rotating_earth_%28large%29.gif", "kind": "image", "animated": True},
     {"name": "google-image-link", "url": "https://www.google.com/imgres?imgurl=https%3A%2F%2Fupload.wikimedia.org%2Fwikipedia%2Fcommons%2F2%2F2c%2FRotating_earth_%2528large%2529.gif&imgrefurl=https%3A%2F%2Fcommons.wikimedia.org%2Fwiki%2FFile%3ARotating_earth_%28large%29.gif", "kind": "image", "animated": True},
     {"name": "youtube-video", "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw", "kind": "video"},
+    {"name": "responsive-image", "url": "https://mdn.github.io/learning-area/html/multimedia-and-embedding/responsive-images/srcset-resolutions.html", "kind": "image", "width": 640, "height": 427},
 )
 
 
@@ -90,6 +91,12 @@ def check_case(case: dict, *, save: bool = False) -> dict:
         if "animated" in case and inspected.animated != case["animated"]:
             raise ValueError("The animation was not recognized as animated media.")
         result.update(title=inspected.information.get("title"), kinds=inspected.kinds, animated=inspected.animated)
+        if "width" in case or "height" in case:
+            dimensions = inspected.image_dimensions
+            for key, index in (("width", 0), ("height", 1)):
+                if key in case and (dimensions is None or dimensions[index] != case[key]):
+                    raise ValueError(f"The inspected {key} does not match the expected {case[key]} pixels.")
+            result["dimensions"] = dimensions
         if save:
             with tempfile.TemporaryDirectory(prefix="unidown-live-") as temporary, isolated_history(Path(temporary)):
                 downloaded = download(DownloadRequest(case["url"], kind, Path(temporary)), inspected=inspected, logger=_QuietLogger())
@@ -97,6 +104,9 @@ def check_case(case: dict, *, save: bool = False) -> dict:
                 if size == 0:
                     raise ValueError("The downloaded file is empty.")
                 details = validate_media(downloaded.path, kind=kind, animated=inspected.animated)
+                for key in ("width", "height"):
+                    if key in case and details.get(key) != case[key]:
+                        raise ValueError(f"The decoded {key} does not match the expected {case[key]} pixels.")
                 result.update(downloaded_bytes=size, extension=downloaded.path.suffix, decoded=details)
                 if kind == "image" and not inspected.animation_video and inspected.image_data and downloaded.path.read_bytes() != inspected.image_data:
                     raise ValueError("The original image bytes changed during download.")

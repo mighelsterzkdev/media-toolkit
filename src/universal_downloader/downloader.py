@@ -25,6 +25,7 @@ from .inspection import MediaInspection, inspect_streams
 from .limits import TransferBudget, limited_format_selector, validate_file_limits, validate_inspected_limits, validate_limits
 from .media import AUDIO_EXTENSIONS, NativeAudio, original_path
 from .sources import configure_sources, is_video_animation
+from .resume import ResumeWork
 from .tiktok import is_tiktok_sound_url
 from .urls import google_target, validate_url
 
@@ -248,21 +249,32 @@ def download(
         validate_file_limits(existing, max_size=request.max_size, max_height=request.max_height, ffmpeg=find_ffmpeg())
         return DownloadResult(title, existing, True)
     try:
-        # yt-dlp may trust a filename without checking its bytes. Work in a
-        # private folder and publish only the completed result through history.
-        with tempfile.TemporaryDirectory(prefix=".unidown-", dir=output_dir) as temporary:
-            if target:
-                result = _download_converted(url, kind, target, Path(temporary), inspected, progress_hook, logger, request=request)
-            else:
-                result = _download_original(url, kind, Path(temporary), inspected, progress_hook, logger, request=request)
+        with ResumeWork(output_dir, identity, logger=logger, progress_hook=progress_hook) as work:
+            for attempt in range(3):
+                try:
+                    if target:
+                        result = _download_converted(url, kind, target, work.data, inspected, progress_hook, logger, request=request, resume_work=work)
+                    else:
+                        result = _download_original(url, kind, work.data, inspected, progress_hook, logger, request=request, resume_work=work)
+                    break
+                except DownloadError as error:
+                    if error.code == "resume_unavailable" and attempt < 2:
+                        work.fallback(error)
+                        continue
+                    if error.code != "resume_changed" or attempt == 2:
+                        raise
+                    work.reset()
             validate_file_limits(result.path, max_size=request.max_size, max_height=request.max_height, ffmpeg=find_ffmpeg())
+            # publish_file stages on the destination filesystem, so app-data
+            # work on C: can safely publish a completed download to D:.
             path, exists = history.publish(result.path, identity, title)
+            work.complete()
     except OSError as error:
         raise DownloadError(f"Could not save the file: {error}") from error
     return DownloadResult(title, path, exists)
 
 
-def _download_original(url, kind, output_dir, inspected, progress_hook, logger, *, request=None) -> DownloadResult:
+def _download_original(url, kind, output_dir, inspected, progress_hook, logger, *, request=None, resume_work=None) -> DownloadResult:
     """Retrieve original bytes inside an exclusively owned temporary folder."""
     image_file = kind == "image" and not inspected.animation_video
     qualifier = f" [{kind}]" if kind != "video" else ""
@@ -271,11 +283,16 @@ def _download_original(url, kind, output_dir, inspected, progress_hook, logger, 
     source_tag = ".source" if kind == "audio" else ""
     max_size = getattr(request, "max_size", None)
     max_height = getattr(request, "max_height", None)
-    budget = TransferBudget(max_size, progress_hook)
+    def report(status):
+        if resume_work:
+            resume_work.progress(status)
+        if progress_hook:
+            progress_hook(status)
+    budget = TransferBudget(max_size, report)
     options = {
         **_common_options(logger),
         "paths": {"home": str(output_dir)},
-        "outtmpl": {"default": f"%(title).100B [%(id).40B]{qualifier}{source_tag}.%(ext)s"},
+        "outtmpl": {"default": f"source{source_tag}.%(ext)s"},
         "progress_hooks": [budget],
     }
     if max_size is not None:
@@ -309,8 +326,36 @@ def _download_original(url, kind, output_dir, inspected, progress_hook, logger, 
                     data = fetch_image(downloader, information, progress_hook=budget)
                 if max_size is not None and len(data) > max_size:
                     raise DownloadError("The source file exceeds --max-size. Increase the limit.")
+                if resume_work:
+                    resume_work.prepare(downloader, [], information, image_data=data, maximum=max_size)
+                    if completed := resume_work.completed("original"):
+                        return DownloadResult(information.get("title", completed.stem), completed)
                 path, exists = save_image(downloader, information, data)
+                if resume_work:
+                    resume_work.remember("original", path)
                 return DownloadResult(information.get("title", path.stem), path, exists)
+            if resume_work:
+                formats = information.get("formats") or [information]
+                context = {"formats": formats, "has_merged_format": any("none" not in (source.get("vcodec"), source.get("acodec")) for source in formats), "incomplete_formats": all(source.get("vcodec") == "none" for source in formats) or all(source.get("acodec") == "none" for source in formats)}
+                selected = list(downloader.format_selector(context))
+                if not selected:
+                    raise DownloadError("No compatible source could be selected.")
+                source = selected[-1]
+                sources = source.get("requested_formats") or [source]
+                resume_work.prepare(downloader, sources, information, maximum=max_size)
+                if completed := resume_work.completed("original"):
+                    return DownloadResult(information.get("title", completed.stem), completed)
+                # Freeze the exact inspected selection, including If-Range
+                # validators, for yt-dlp's normal download and merge pipeline.
+                downloader.format_selector = lambda context: iter([source])
+                for relative in resume_work.metadata.get("transfers", {}):
+                    completed_path = output_dir / relative
+                    partial = completed_path.with_name(completed_path.name + ".part")
+                    existing = partial if partial.is_file() else completed_path
+                    if existing.is_file():
+                        budget.received[str(completed_path)] = existing.stat().st_size
+                if max_size and sum(budget.received.values()) > max_size:
+                    raise DownloadError("The existing partial sources exceed --max-size. Increase the limit.")
             if kind == "audio":
                 reported = [information.get("ext"), *(source.get("ext") for source in information.get("formats") or [])]
                 extensions = dict.fromkeys((*AUDIO_EXTENSIONS, *(ext for ext in reported if isinstance(ext, str) and ext.isalnum())))
@@ -320,7 +365,11 @@ def _download_original(url, kind, output_dir, inspected, progress_hook, logger, 
                         return DownloadResult(information.get("title", existing.stem), existing, True)
                 downloader.add_post_processor(NativeAudio(downloader))
             downloader.add_post_processor(_FinalFile(results), when="after_move")
-            downloader.process_ie_result(information, download=True)
+            if resume_work:
+                with resume_work.guard_requests(downloader):
+                    downloader.process_ie_result(information, download=True)
+            else:
+                downloader.process_ie_result(information, download=True)
     except YtDlpError as error:
         if logger:
             logger.debug(str(error))
@@ -335,26 +384,27 @@ def _download_original(url, kind, output_dir, inspected, progress_hook, logger, 
         raise DownloadError("The download finished without producing a file. Try updating yt-dlp.")
     path, exists = results[-1]
     validate_file_limits(path, max_size=max_size)
+    if resume_work:
+        resume_work.remember("original", path)
     return DownloadResult(information.get("title", path.stem), path, exists)
 
 
-def _download_converted(url, kind, target, output_dir, inspected, progress_hook, logger, *, request=None) -> DownloadResult:
+def _download_converted(url, kind, target, output_dir, inspected, progress_hook, logger, *, request=None, resume_work=None) -> DownloadResult:
     """Download once into a private work folder, then convert and publish."""
     destination = output_dir / f"converted.{target}"
     title = inspected.information.get("title") or destination.stem
-    if destination.exists():
-        if not destination.is_file():
-            raise DownloadError(f"The output path is not a file: {destination}")
-        return DownloadResult(title, destination, True)
     try:
-        with tempfile.TemporaryDirectory(prefix=".unidown-", dir=output_dir) as temporary:
-            original = _download_original(url, kind, Path(temporary), inspected, progress_hook, logger, request=request)
-            if progress_hook:
-                progress_hook({"status": "converting", "format": target})
-            created = convert_file(
-                original.path, target, destination, logger=logger,
-                max_height=getattr(request, "max_height", None), max_size=getattr(request, "max_size", None),
-            )
+        original = _download_original(url, kind, output_dir, inspected, progress_hook, logger, request=request, resume_work=resume_work)
+        if resume_work and (completed := resume_work.completed("converted")):
+            return DownloadResult(title, completed)
+        if progress_hook:
+            progress_hook({"status": "converting", "format": target})
+        created = convert_file(
+            original.path, target, destination, logger=logger,
+            max_height=getattr(request, "max_height", None), max_size=getattr(request, "max_size", None),
+        )
+        if resume_work:
+            resume_work.remember("converted", destination)
     except OSError as error:
         raise DownloadError(f"Could not prepare the conversion: {error}") from error
     return DownloadResult(title, destination, not created)

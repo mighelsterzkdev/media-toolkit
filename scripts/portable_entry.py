@@ -5,7 +5,7 @@ import sys
 from scripts.install_tools import main as install_tools
 from universal_downloader.compatibility import compatibility_issues
 from universal_downloader.dependencies import find_ffmpeg, find_js_runtime
-from universal_downloader.cli import main
+from universal_downloader.cli import build_parser, main
 
 
 def portable_main() -> int:
@@ -17,7 +17,13 @@ def portable_main() -> int:
         return 1
     if sys.argv[1:] == ["--install-tools"]:
         return install_tools()
-    if not any(argument in sys.argv[1:] for argument in ("--help", "-h", "--version", "--doctor")):
+    # Settings and cleanup do not require a media runtime or network access.
+    # Use the same parser as the CLI so invalid flags fail before setup too.
+    args = build_parser().parse_args(sys.argv[1:])
+    standalone = args.url is None and args.batch is None and any((
+        args.save_preferences, args.show_preferences, args.reset_preferences, args.clear_resume,
+    ))
+    if not args.doctor and not standalone:
         if not find_ffmpeg() or not find_js_runtime():
             print("First start: preparing FFmpeg and the JavaScript runtime from their publishers.")
             print("The pinned downloads are checked with SHA-256 and saved beside this application.\n")

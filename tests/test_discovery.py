@@ -21,10 +21,23 @@ from yt_dlp.utils import DownloadError as YtDlpError, ExtractorError
 from universal_downloader.dependencies import find_ffmpeg
 from universal_downloader.downloader import DownloadRequest, download, inspect_media
 from universal_downloader.errors import DownloadError
+from universal_downloader.discovery import PageMedia, image_variants, srcset_candidates
 from universal_downloader.urls import google_target
 
 
 class URLTests(unittest.TestCase):
+    def test_srcset_keeps_signed_query_commas_and_ignores_invalid_descriptors(self):
+        signed = "https://cdn.example/file?token=a%2Bb%26c&crop=1,2"
+        parsed = srcset_candidates(f"/small.png 1x, {signed} 2.5x, /bad.png 0x, /invalid.png 200w 2x")
+        self.assertEqual(parsed, [("/small.png", 1.0, "x"), (signed, 2.5, "x")])
+        self.assertEqual(image_variants({"srcset": "/small.png 320w, /large.png 1600w", "sizes": "(max-width: 40em) 100vw, 50vw"}), ("/large.png", "/small.png"))
+        self.assertEqual(image_variants({"src": "/small.png", "width": "1200", "srcset": "/medium.png 0320w, /large.png 640w"}), ("/large.png", "/medium.png", "/small.png"))
+
+    def test_malformed_or_unsafe_image_attributes_do_not_become_candidates(self):
+        parser = PageMedia()
+        parser.feed('<meta http-equiv><link rel><script type></script><a href>Related</a><img width height alt class src="http://[" data-src="javascript:alert(1)"><img src="/placeholder.gif"><img srcset="data:image/gif;base64,AAAA 1x, /real.gif 2x">')
+        self.assertEqual(parser.images, [("/real.gif", "image")])
+
     def test_google_target_preserves_asset_query_and_percent_escapes(self):
         asset = "https://cdn.example/media?token=a%2Bb%26c&size=original"
         for host in ("www.google.com", "google.com.br", "www.google.co.uk"):
@@ -61,6 +74,11 @@ class _Handler(SimpleHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path.startswith("/signed.gif?"):
+            if self.path != "/signed.gif?token=a%2Bb%26c&crop=1,2":
+                self.send_error(403)
+                return
+            self.path = "/animated.gif"
         if self.path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/animated.gif")
@@ -87,6 +105,7 @@ class DiscoveryTests(unittest.TestCase):
         a.save(cls.root / "animated.gif", save_all=True, append_images=[Image.new("RGB", (80, 60), "blue")], duration=100, loop=0)
         Image.new("RGB", (80, 60), "yellow").save(cls.root / "cover.jpg")
         Image.new("RGB", (90, 70), "green").save(cls.root / "second.png")
+        Image.new("RGB", (160, 120), "green").save(cls.root / "large.png")
         pages = {
             "img.html": '<img src="/animated.gif"><img src="/cover.jpg" width="16" height="16">',
             "structured.html": '<script type="application/ld+json">' + json.dumps({"@type": "ImageObject", "contentUrl": "/animated.gif"}) + '</script>',
@@ -99,6 +118,20 @@ class DiscoveryTests(unittest.TestCase):
             "broken-video.html": '<meta property="og:image" content="/cover.jpg"><video src="/denied.mp4"></video>',
             "misleading.mp4": '<meta property="og:image" content="/animated.gif">',
             "empty.html": '<p>No media</p>',
+            "srcset.html": '<img src="/cover.jpg" sizes="(max-width: 30em) 100vw, 50vw" srcset="/second.png 90w, /large.png 160w">',
+            "density.html": '<img width="80" height="60" src="/cover.jpg" srcset="/second.png 1x, /large.png 2x">',
+            "picture.html": '<picture><source type="image/avif" srcset="/missing.avif 400w"><source type="image/png" srcset="/second.png 90w, /large.png 160w"><img src="/cover.jpg" width="80" height="60"></picture>',
+            "picture-crops.html": '<picture><source media="(max-width: 799px)" srcset="/second.png"><source media="(min-width: 800px)" srcset="/large.png"><img src="/large.png"></picture>',
+            "lazy-srcset.html": '<img width="1" height="1" src="/placeholder.gif" data-srcset="/cover.jpg 80w, /animated.gif 160w">',
+            "original-srcset.html": '<img width="1" height="1" src="/placeholder.gif" data-original-srcset="/cover.jpg 80w, /animated.gif 160w">',
+            "data-original.html": '<img src="/cover.jpg" srcset="/second.png 90w, /large.png 160w" data-original="/animated.gif">',
+            "signed-srcset.html": '<img srcset="/cover.jpg 1x, /signed.gif?token=a%2Bb%26c&amp;crop=1,2 2x">',
+            "responsive-gallery.html": '<img srcset="/cover.jpg 80w, /large.png 160w"><img srcset="/cover.jpg 1x, /animated.gif 2x">',
+            "meta-refresh.html": '<meta http-equiv="refresh" content="0; URL=\'/animated.gif\'"><p>Redirecting...</p>',
+            "delayed-refresh.html": '<meta http-equiv="refresh" content="30; url=/animated.gif"><p>This is a page, not an immediate redirect.</p>',
+            "media-with-refresh.html": '<meta http-equiv="refresh" content="0; url=/animated.gif"><video src="/denied.mp4" poster="/cover.jpg"></video>',
+            "refresh-loop.html": '<meta http-equiv="refresh" content="0; url=/refresh-loop.html">',
+            "related-link.html": '<p>Related links:</p><a href="https://www.google.com/imgres?imgurl=https://example.com/related.gif">Another image</a>',
         }
         for name, body in pages.items():
             (cls.root / name).write_text('<!doctype html><html><head><title>Fixture</title></head><body>' + body + '</body></html>', encoding="utf-8")
@@ -168,6 +201,42 @@ class DiscoveryTests(unittest.TestCase):
                 inspected = self.inspect(path)
                 self.assertTrue(inspected.animated)
                 self.assertEqual(inspected.image_data, (self.root / "animated.gif").read_bytes())
+
+    def test_responsive_images_choose_largest_declared_variant_without_gallery_duplicates(self):
+        for path in ("/srcset.html", "/density.html", "/picture.html"):
+            with self.subTest(path=path):
+                inspected = self.inspect(path)
+                self.assertEqual(inspected.image_data, (self.root / "large.png").read_bytes())
+                self.assertEqual(inspected.image_dimensions, (160, 120))
+                self.assertFalse(inspected.alternatives)
+
+    def test_lazy_srcset_and_explicit_original_do_not_download_placeholders(self):
+        for path in ("/lazy-srcset.html", "/original-srcset.html", "/data-original.html", "/signed-srcset.html"):
+            with self.subTest(path=path):
+                inspected = self.inspect(path)
+                self.assertTrue(inspected.animated)
+                self.assertEqual(inspected.image_data, (self.root / "animated.gif").read_bytes())
+
+    def test_distinct_responsive_images_remain_explicit_alternatives(self):
+        inspected = self.inspect("/responsive-gallery.html")
+        self.assertEqual(len(inspected.alternatives), 2)
+        self.assertEqual({asset.image_extension for asset in inspected.alternatives}, {"gif", "png"})
+        directed = self.inspect("/picture-crops.html")
+        self.assertEqual(len(directed.alternatives), 2)
+        self.assertEqual(directed.alternatives[0].image_dimensions, (160, 120))
+        self.assertEqual({asset.image_dimensions for asset in directed.alternatives}, {(160, 120), (90, 70)})
+
+    def test_only_immediate_redirect_shells_follow_generic_meta_refresh(self):
+        inspected = self.inspect("/meta-refresh.html")
+        self.assertTrue(inspected.animated)
+        with self.assertRaises(DownloadError):
+            self.inspect("/delayed-refresh.html")
+        with self.assertRaisesRegex(DownloadError, "403|denied"):
+            self.inspect("/media-with-refresh.html")
+        with self.assertRaisesRegex(DownloadError, "loop|media could not be accessed"):
+            self.inspect("/refresh-loop.html")
+        with self.assertRaisesRegex(DownloadError, "No downloadable"):
+            self.inspect("/related-link.html")
 
     def test_html_video_source_exposes_media_and_separate_thumbnail(self):
         if not self.tools:
