@@ -1,3 +1,3 @@
 """Universal Downloader: a simple interface for yt-dlp."""
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"

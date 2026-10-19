@@ -76,12 +76,14 @@ export default function App() {
       <SettingsDialog state={state} disabled={disconnected} busy={busy} onSave={value => invoke('save_settings', value)} onClearResume={() => invoke('clear_resume')} />
     </header>
 
+    {!connected || error || state.notice || state.tools.status !== 'ready' ? <div className="app-notices">
     {!connected ? <div className="notice" role="status"><CircleAlert className="size-4 shrink-0" /><span>Waiting for the desktop connection. Open this app with Universal Downloader.</span></div> : null}
     {error ? <div className="notice notice-error" role="alert"><CircleAlert className="size-4 shrink-0" /><span>{error}</span><Button variant="ghost" size="icon" aria-label="Dismiss error" onClick={dismissError}><X /></Button></div> : null}
     {state.notice ? <div className="notice" role="status"><span>{state.notice}</span></div> : null}
     {connected && state.tools.status !== 'ready' ? <div className="notice tools-notice" role="status"><CircleAlert className="size-4 shrink-0" /><span>{state.tools.message || state.tools.error || (state.tools.status === 'installing' ? 'Installing media tools…' : 'Install media tools to enable all download and conversion options.')}</span><Button variant="outline" size="sm" disabled={state.tools.status === 'installing' || busy} onClick={() => void invoke('install_tools')}>{state.tools.status === 'installing' ? <LoaderCircle className="animate-spin" /> : null}{state.tools.status === 'failed' ? 'Retry installation' : 'Install tools'}</Button></div> : null}
+    </div> : null}
 
-    <main>
+    <main className="app-content">
       <section className="download-card" aria-labelledby="new-download-heading">
         <div className="section-heading new-download-heading"><h2 id="new-download-heading">New download</h2><BatchDialog disabled={disconnected || !toolsReady} busy={busy || installing} onEnqueue={text => invoke('enqueue_links', text)} /></div>
         <form onSubmit={check} className="url-form">

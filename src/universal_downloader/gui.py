@@ -370,7 +370,7 @@ def main() -> int:
         webview.settings["ALLOW_FILE_URLS"] = False
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = False
         window = webview.create_window(
-            "Universal Downloader", server.url, js_api=api, width=1100, height=800,
+            "Universal Downloader", server.url, js_api=api, width=1000, height=760,
             min_size=(760, 600), background_color="#09090b", text_select=True,
         )
         api._window, api._webview = window, webview

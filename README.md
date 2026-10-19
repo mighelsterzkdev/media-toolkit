@@ -52,7 +52,7 @@ Downloads go into the extracted folder's `downloads` directory when launched thr
 
 ```powershell
 # Check the ZIP against the published checksum before extraction
-Get-FileHash .\universal-downloader-0.7.0-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\universal-downloader-0.7.1-windows-x64.zip -Algorithm SHA256
 
 # Prepare the external tools without opening the menu
 .\unidown.exe --install-tools
@@ -250,8 +250,8 @@ Run on Windows x64 using a separate build environment:
 ```powershell
 python -B -m venv .tools/build-env
 .\.tools\build-env\Scripts\python.exe -B -m pip install -c constraints.txt -e . pyinstaller==6.22.3
-.\.tools\build-env\Scripts\python.exe -B scripts/build_windows_gui.py --output dist/release-0.7.0
-.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/release-0.7.0/universal-downloader-0.7.0-windows-x64/unidown.exe --bootstrap
+.\.tools\build-env\Scripts\python.exe -B scripts/build_windows_gui.py --output dist/release-0.7.1
+.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/release-0.7.1/universal-downloader-0.7.1-windows-x64/unidown.exe --bootstrap
 ```
 
 Use a new output directory for each build. The desktop build produces both executables, their separate library folders, a complete ZIP, and `SHA256SUMS.txt`. `scripts/build_windows.py` remains available for a terminal-only ZIP. The committed frontend assets and notices are included without installing Node.js on the build machine. It checks the executable archive to exclude optional Mutagen and build-time PyInstaller modules. The verifier removes Python and external tools from PATH, checks the bundled executable, preserves local image/video originals, converts GIF animation to H.264 MP4, extracts original AAC audio, converts MP3, verifies cached reuse, runs a link queue, checks remembered preferences, and terminates/restarts a real frozen HTTP download to verify continuation. Its temporary download history is isolated from the user's history. The **Build portable Windows release** workflow builds and checks the same artifacts on tagged versions or manual runs; it does not publish a release automatically.
