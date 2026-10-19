@@ -25,15 +25,20 @@ RUNTIME_PACKAGES = (
 def write_notices(destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     inventory = []
-    for name in (*RUNTIME_PACKAGES, "pyinstaller"):
+    for name in (*RUNTIME_PACKAGES, "packaging", "setuptools", "pyinstaller"):
         distribution = metadata.distribution(name)
         package = destination / name
-        package.mkdir()
+        package.mkdir(exist_ok=True)
         for entry in distribution.files or ():
             if ".dist-info/" in str(entry).replace("\\", "/") and any(word in str(entry).lower() for word in ("license", "copying", "notice")):
                 source = Path(distribution.locate_file(entry))
                 if source.is_file():
-                    shutil.copyfile(source, package / source.name)
+                    # Preserve separate vendored notices with identical basenames.
+                    parts = Path(entry).parts
+                    start = next(index for index, part in enumerate(parts) if part.endswith(".dist-info"))
+                    target = package.joinpath(*parts[start:])
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target)
         details = {key: distribution.metadata.get_all(key) for key in ("Name", "Version", "License", "License-Expression", "Home-page", "Project-URL")}
         (package / "METADATA.json").write_text(json.dumps(details, indent=2), encoding="utf-8")
         inventory.append(f"{distribution.metadata['Name']} {distribution.version}")
@@ -117,14 +122,20 @@ def build(output: Path) -> Path:
         "This release is unsigned; the SHA256SUMS.txt file verifies download integrity.\n",
         encoding="utf-8",
     )
-    with ZipFile(archive, "w", compression=ZIP_DEFLATED, compresslevel=9) as package:
-        for file in sorted(bundle.rglob("*")):
-            if file.is_file():
-                package.write(file, str(file.relative_to(output)))
+    write_archive(bundle, archive)
     digest = _checksum(archive)
     (output / "SHA256SUMS.txt").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
     print(f"\nPortable release: {archive}\nSHA-256: {digest}", flush=True)
     return archive
+
+
+def write_archive(bundle: Path, archive: Path) -> None:
+    """Never redistribute tools or user media created while verifying a bundle."""
+    with ZipFile(archive, "w", compression=ZIP_DEFLATED, compresslevel=9) as package:
+        for file in sorted(bundle.rglob("*")):
+            relative = file.relative_to(bundle)
+            if file.is_file() and relative.parts[0] not in (".tools", "downloads"):
+                package.write(file, str(Path(bundle.name) / relative))
 
 
 def verify_exclusions(executable: Path) -> None:

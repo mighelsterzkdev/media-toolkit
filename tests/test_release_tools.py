@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
 
-from scripts import install_tools
+from scripts import build_windows, install_tools
 from universal_downloader.compatibility import TESTED_VERSIONS, compatibility_issues
 from universal_downloader import dependencies
 
@@ -38,6 +38,19 @@ class ReleaseCompatibilityTests(unittest.TestCase):
 
 
 class PortableToolTests(unittest.TestCase):
+    def test_repacked_archive_excludes_downloaded_tools_and_user_media(self):
+        with tempfile.TemporaryDirectory(prefix="unidown-archive-test-") as temporary:
+            root = Path(temporary)
+            bundle = root / "portable"
+            for name in ("unidown.exe", "_internal/library.bin", "licenses/notice.txt", ".tools/ffmpeg.exe", "downloads/private.mp4"):
+                path = bundle / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fixture")
+            archive = root / "portable.zip"
+            build_windows.write_archive(bundle, archive)
+            with ZipFile(archive) as package:
+                self.assertEqual(set(package.namelist()), {"portable/unidown.exe", "portable/_internal/library.bin", "portable/licenses/notice.txt"})
+
     def test_frozen_executable_searches_its_own_directory_instead_of_another_checkout(self):
         with patch.object(dependencies.sys, "frozen", True, create=True), patch.object(dependencies, "PROJECT_ROOT", Path("portable")):
             self.assertEqual(dependencies._tool_roots(), [Path("portable")])

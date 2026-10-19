@@ -32,7 +32,7 @@ class IdentityTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.output = self.root / "downloads"
         environment = patch.dict(os.environ, {"UNIDOWN_DATA_DIR": str(self.root / "state")})
         environment.start()
