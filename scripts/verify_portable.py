@@ -79,7 +79,7 @@ def verify(executable: Path, *, bootstrap: bool = False) -> None:
     environment.pop("PYTHONPATH", None)
     environment.pop("PYTHONHOME", None)
     with tempfile.TemporaryDirectory(prefix="unidown-portable-check-") as temporary:
-        root = Path(temporary)
+        root = Path(temporary).resolve()
         environment["UNIDOWN_DATA_DIR"] = str(root / "history")
 
         def run(*arguments, expected=0):
