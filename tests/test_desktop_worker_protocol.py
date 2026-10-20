@@ -7,6 +7,8 @@ import unittest
 from unittest.mock import patch
 
 from universal_downloader.desktop_worker import _worker_main
+from universal_downloader.downloader import DownloadResult
+from universal_downloader.inspection import MediaInspection
 
 
 class Connection:
@@ -24,6 +26,36 @@ class Connection:
 
 
 class DesktopWorkerProtocolTests(unittest.TestCase):
+    def test_download_uses_shared_converter_and_forwards_measured_progress(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inspected = MediaInspection("https://example.com/audio", {"title": "Recording"}, ("audio",))
+            connection = Connection({"action": "download", "inspected": inspected, "kind": "audio", "format": "flac",
+                                     "settings": {"output": str(root), "max_height": None, "max_size": None}})
+
+            def download(request, *, progress_hook, **kwargs):
+                self.assertTrue(request.desktop_conversion)
+                self.assertEqual(request.convert_to, "flac")
+                progress_hook({"status": "downloading", "downloaded_bytes": 30, "total_bytes": 100})
+                progress_hook({"status": "preparing", "progress": math.nan, "source": "private-path"})
+                progress_hook({"status": "converting", "operation": "copying", "progress": 45, "eta": 3})
+                progress_hook({"status": "converting", "operation": "copying", "progress": 100, "eta": math.inf})
+                return DownloadResult("Recording", root / "Recording.flac")
+
+            with patch("universal_downloader.desktop_worker.download", side_effect=download), patch("universal_downloader.desktop_worker._can_convert", return_value=False), patch("universal_downloader.desktop_worker.os.setsid", create=True), patch("universal_downloader.desktop_worker.time.monotonic", side_effect=range(1, 11)):
+                _worker_main(connection)
+            progress = [value for event, value in connection.messages if event == "progress"]
+            self.assertEqual(progress[0]["status"], "downloading")
+            self.assertEqual(progress[1]["operation"], "preparing")
+            self.assertIsNone(progress[1]["progress"])
+            self.assertEqual(progress[2]["progress"], 45)
+            self.assertEqual(progress[2]["operation"], "copying")
+            self.assertEqual(progress[-1]["progress"], 99.9)
+            self.assertIsNone(progress[-1]["eta"])
+            self.assertTrue(all("source" not in value for value in progress))
+            self.assertEqual(connection.messages[-1][0], "result")
+            self.assertTrue(connection.closed)
+
     def test_conversion_forwards_measured_progress_without_nonfinite_or_private_values(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

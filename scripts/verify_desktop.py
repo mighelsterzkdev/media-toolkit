@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from hashlib import sha256
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import multiprocessing
 from multiprocessing import spawn
@@ -12,6 +13,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 import time
 
 from PIL import Image, ImageDraw
@@ -63,6 +65,74 @@ def require(response):
     return response["state"]
 
 
+def verify_download_formats(service, sources, video, ffprobe):
+    class Handler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(sources), **kwargs)
+
+        def log_message(self, *args):
+            pass
+
+    if video is not None:
+        (sources / "Clip.mp4").write_bytes(video.read_bytes())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    cases = [("Graphic.webp", "image", "tiff", "TIFF", None), ("Graphic.webp", "image", "avif", "AVIF", None),
+             ("Icon.png", "image", "ico", "ICO", None), ("Animation.gif", "image", "apng", "PNG", None),
+             ("Animation.gif", "image", "webp", "WEBP", None), ("Animation.webp", "image", "gif", "GIF", 32)]
+    if video is not None:
+        cases += [("Clip.mp4", "video", "mkv", None, None), ("Clip.mp4", "audio", "flac", None, None),
+                  ("Animation.webp", "image", "mp4", None, 32)]
+    try:
+        for filename, kind, target, expected, max_height in cases:
+            service.save_settings({"max_height": max_height})
+            before = len(service.get_state()["tasks"])
+            service.check_url(f"http://127.0.0.1:{server.server_port}/{filename}")
+            state = wait_for(service, lambda value: value["inspection"]["status"] != "checking")
+            inspected = state["inspection"]
+            assert inspected["status"] == "ready", inspected
+            assert len(state["tasks"]) == before, "Checking a link started a download"
+            asset = inspected["assets"][0]
+            options = next(item["options"] for item in asset["kinds"] if item["id"] == kind)
+            if max_height is None:
+                assert options[0]["id"] == "original" and options[0]["recommended"], options
+            else:
+                assert all(option["id"] != "original" for option in options), options
+            assert target in {option["id"] for option in options}, (filename, target, options)
+            service.enqueue(inspected["id"], asset["id"], kind, target)
+            state = wait_for(service, lambda value: len(value["tasks"]) > before and value["tasks"][-1]["status"] in ("completed", "failed"))
+            task = state["tasks"][-1]
+            assert task["status"] == "completed", task
+            assert Path(task["path"]).suffix == "." + target, task
+            if expected:
+                with Image.open(task["path"]) as image:
+                    image.load()
+                    assert image.format == expected, (target, image.format)
+                    if filename in ("Animation.gif", "Animation.webp"):
+                        assert image.n_frames == 2, (target, image.n_frames)
+                    if max_height is not None:
+                        assert image.height <= max_height
+            else:
+                result = subprocess.run([str(ffprobe), "-v", "error", "-count_frames", "-show_streams", "-show_format", "-of", "json", task["path"]],
+                                        capture_output=True, text=True, timeout=20, check=True, **hidden_process_options())
+                metadata = json.loads(result.stdout)
+                if target == "mkv":
+                    assert "matroska" in metadata["format"]["format_name"]
+                    assert {item["codec_type"] for item in metadata["streams"]} == {"audio", "video"}
+                elif target == "flac":
+                    assert [item["codec_name"] for item in metadata["streams"]] == ["flac"]
+                else:
+                    stream = next(item for item in metadata["streams"] if item["codec_type"] == "video")
+                    assert int(stream["nb_read_frames"]) == 2, metadata
+                    assert stream["height"] <= max_height, metadata
+        print("Desktop URL checks passed: expanded image, animation, video and audio targets through real contained workers.", flush=True)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def verify(executable: Path | None = None):
     previous_state = os.environ.get("UNIDOWN_DATA_DIR")
     with tempfile.TemporaryDirectory(prefix="media-toolkit-desktop-check-") as temporary, worker_executable(executable):
@@ -70,8 +140,8 @@ def verify(executable: Path | None = None):
         os.environ["UNIDOWN_DATA_DIR"] = str(root / "state")
         sources, output = root / "source", root / "output"
         sources.mkdir()
-        transparent, photo, webp, animated, animated_gif, icon, phone, broken = [sources / name for name in (
-            "Transparent.png", "Photo.jpg", "Graphic.webp", "Animation.png", "Animation.gif", "Icon.png", "Phone.heic", "Broken.png")]
+        transparent, photo, webp, animated, animated_gif, icon, phone, broken, animated_webp = [sources / name for name in (
+            "Transparent.png", "Photo.jpg", "Graphic.webp", "Animation.png", "Animation.gif", "Icon.png", "Phone.heic", "Broken.png", "Animation.webp")]
         with Image.new("RGBA", (64, 48), (0, 0, 0, 0)) as image:
             ImageDraw.Draw(image).rectangle((16, 12, 47, 35), fill=(30, 120, 210, 255))
             image.save(transparent)
@@ -84,6 +154,7 @@ def verify(executable: Path | None = None):
             with Image.new("RGB", image.size, "blue") as second:
                 image.save(animated, save_all=True, append_images=[second], duration=100, loop=0)
                 image.save(animated_gif, save_all=True, append_images=[second], duration=100, loop=0)
+                image.save(animated_webp, save_all=True, append_images=[second], duration=[100, 200], loop=0, lossless=True)
         phone.write_bytes((Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "local-sample.heic").read_bytes())
         tools = find_ffmpeg()
         video = None
@@ -270,6 +341,9 @@ def verify(executable: Path | None = None):
             require(api.clear_conversion_files())
             require(api.remove_finished())
             assert all(path.is_file() for path in completed)
+            if tools is not None:
+                verify_download_formats(service, sources, video, ffprobe)
+                assert all(sha256(file.read_bytes()).hexdigest() == digest for file, digest in originals.items())
             av_result = "two-frame animation MP4 timing, MP4 audio extraction and WebM conversion, " if video is not None else ""
             print("Desktop workers passed: content inspection, AVIF/BMP/TIFF/ICO/GIF/JP2/TGA roundtrips, HEIC decoding, animation preservation, " + av_result + "packet-preserving remux, saved queue recovery with explicit Retry, atomic batch validation, JPEG background, lossless WebP, cancel/retry, completed-file shortcut, source preservation and private workspace cleanup.", flush=True)
         finally:

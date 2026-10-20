@@ -1,6 +1,6 @@
 # Media Toolkit
 
-A desktop app with two tools: **Download** saves original media from a URL; **Convert** changes local images, audio, video and animations into compatible formats. Both tools share one queue. The original terminal downloader remains available.
+A desktop app with two tools: **Download** saves media from a URL in its original or a compatible format; **Convert** changes local images, audio, video and animations into compatible formats. Both tools share conversion engines and one queue. The original terminal downloader remains available.
 
 **Desktop: Windows 10/11 · React / shadcn/ui / pywebview**
 **Download engine and terminal: Python · yt-dlp · FFmpeg · Pillow · Windows / Linux / macOS**
@@ -41,6 +41,10 @@ The desktop app is tested on Windows x64 and requires the [Microsoft Edge WebVie
 
 **start-cli.cmd** opens the original terminal menu. **start.cmd** with arguments still forwards them to the terminal, so existing scripts continue to work. The installed commands are `media-toolkit` for the desktop and `unidown` for the terminal. `unidown-gui` remains a compatible desktop alias.
 
+The Download **Save as** dropdown uses the same image, audio and video encoders as Convert. It lists compatible formats for the selected media type, including AVIF, WebP, TIFF and JPEG 2000 images, FLAC, WAV and Opus audio, and MKV, MOV and WebM video. **Original** stays recommended. Native copies and unsupported encoders are omitted; ICO requires a square image up to 256 pixels. Conversion checks the downloaded bytes before publishing a completed result. Static-image downloads use white when flattening transparency; Convert also lets you choose black.
+
+Animated GIF, WebP and APNG sources retain their frames in compatible animation outputs. When a height limit requires resizing, GIF and MP4 outputs remain available. Social GIFs delivered as MP4 offer supported video containers and the existing short GIF conversion; still-image formats are not offered for those animations. The terminal retains its existing conversion choices, documented below.
+
 ## Convert local files
 
 Open **Convert** and click **Add files** to choose up to 100 local media files. The app checks their actual contents and available encoders before showing output formats. Choose a format, review the compatible-file count, select the destination, then click **Convert**. A mixed selection converts only the files compatible with that target; the app shows how many files will be skipped. Eligible completed downloads also have a **Convert file** shortcut.
@@ -77,7 +81,7 @@ Downloads go into the extracted folder's `downloads` directory when launched thr
 
 ```powershell
 # Check the ZIP against the published checksum before extraction
-Get-FileHash .\media-toolkit-0.10.0-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\media-toolkit-0.11.0-windows-x64.zip -Algorithm SHA256
 
 # Prepare the external tools without opening the menu
 .\unidown.exe --install-tools
@@ -115,7 +119,7 @@ python3 -m venv .venv
 
 An activated environment also provides the `unidown` command. On Windows, the equivalent Python executable is `.venv\Scripts\python.exe`.
 
-## Choosing what to save
+## Choosing what to save in the terminal
 
 The interactive session never starts the requested media download before you choose an output. It may read page data, image bytes, and bounded media probes while checking what is actually available.
 

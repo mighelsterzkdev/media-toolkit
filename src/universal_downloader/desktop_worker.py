@@ -24,6 +24,18 @@ def _number(value):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else None
 
 
+def _conversion_event(event):
+    operation = event.get("operation")
+    if event.get("status") == "preparing":
+        operation = "preparing"
+    elif operation not in ("preparing", "encoding", "copying"):
+        operation = "encoding"
+    measured = _number(event.get("progress"))
+    return {"status": "converting", "operation": operation,
+            "progress": min(99.9, measured) if measured is not None else None,
+            "eta": _number(event.get("eta")), "speed": _number(event.get("speed"))}
+
+
 def _can_convert(path):
     from .local_media import inspect_local_files
     try:
@@ -59,20 +71,14 @@ def _worker_main(connection):
 
             def conversion_progress(event):
                 nonlocal previous_conversion, previous_operation
-                status = event.get("status")
-                operation = event.get("operation")
-                if status == "preparing":
-                    operation = "preparing"
-                elif operation not in ("preparing", "encoding", "copying"):
-                    operation = "encoding"
+                measured_event = _conversion_event(event)
+                operation = measured_event["operation"]
                 now = time.monotonic()
-                measured = _number(event.get("progress"))
+                measured = measured_event["progress"]
                 if operation == previous_operation and now - previous_conversion < 0.1 and (measured is None or measured < 99.9):
                     return
                 previous_conversion, previous_operation = now, operation
-                connection.send(("progress", {"status": "converting", "operation": operation,
-                                             "progress": min(99.9, measured) if measured is not None else None,
-                                             "eta": _number(event.get("eta")), "speed": _number(event.get("speed"))}))
+                connection.send(("progress", measured_event))
 
             conversion_progress({"status": "preparing"})
             path = convert_local_file(payload["image"], payload["format"], Path(payload["settings"]["output"]),
@@ -101,6 +107,7 @@ def _worker_main(connection):
             inspected.url, kind, Path(payload["settings"]["output"]),
             None if payload.get("format", "original") == "original" else payload["format"],
             height, payload["settings"]["max_size"],
+            desktop_conversion=True,
         )
         previous = 0.0
 
@@ -111,6 +118,9 @@ def _worker_main(connection):
             if status == "downloading" and now - previous < 0.10:
                 return
             previous = now
+            if status in ("preparing", "converting"):
+                connection.send(("progress", _conversion_event(event)))
+                return
             connection.send(("progress", {
                 "status": status,
                 **{field: _number(event.get(field)) for field in ("downloaded_bytes", "total_bytes", "total_bytes_estimate", "speed", "eta")},

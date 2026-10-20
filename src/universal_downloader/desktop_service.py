@@ -19,7 +19,7 @@ from uuid import uuid4
 from PIL import Image, ImageOps
 
 from . import __version__
-from .conversions import available_conversions
+from .desktop_download_formats import available_download_conversions
 from .dependencies import PROJECT_ROOT, find_ffmpeg, find_js_runtime
 from .desktop_queue_store import DesktopQueueStore, RESTORED_MESSAGE, selection_descriptor, selection_identity
 from .desktop_worker import ProcessWorker
@@ -116,7 +116,9 @@ def _asset_description(inspected):
 
 def _asset_options(inspected, settings):
     kinds = []
-    labels = {"mp3": "MP3 audio", "mp4": "MP4 video", "gif": "GIF animation", "png": "PNG image", "jpg": "JPEG image"}
+    names = {"jpg": "JPEG", "jp2": "JPEG 2000", "webp": "WebP", "webm": "WebM"}
+    audio = frozenset(("mp3", "wav", "flac", "m4a", "aac", "opus", "ogg", "aiff"))
+    video = frozenset(("mp4", "mkv", "mov", "webm"))
     for kind in inspected.kinds:
         height = _height(settings, inspected, kind)
         options = []
@@ -127,12 +129,15 @@ def _asset_options(inspected, settings):
         else:
             extension = inspected.original_extension(kind)
             options.append({"id": "original", "label": "Original", "description": f"Keep the source format{f' ({extension.upper()})' if extension else ''}.", "recommended": True})
-        for target in available_conversions(inspected, kind, max_height=height):
+        for target, description in available_download_conversions(inspected, kind, max_height=height).items():
             try:
                 validate_inspected_limits(inspected, kind, target=target, max_height=height, max_size=settings["max_size"])
             except DownloadError:
                 continue
-            options.append({"id": target, "label": labels[target], "description": "Convert after downloading the original.", "recommended": False})
+            category = ("audio" if target in audio else "video" if target in video else
+                        "animation" if inspected.animated and target in ("gif", "webp", "apng") else "image")
+            label = f"{names.get(target, target.upper())} {category}"
+            options.append({"id": target, "label": label, "description": description, "recommended": False})
         if options:
             kinds.append({"id": kind, "label": inspected.labels[kind], "options": options})
     return kinds
@@ -576,7 +581,7 @@ class DesktopService:
                         task.update(title=_text(payload["title"], 300), kind=payload["kind"], status="downloading")
                     elif event == "progress":
                         status = payload["status"]
-                        if task["action"] == "convert" and status in ("preparing", "converting"):
+                        if status in ("preparing", "converting"):
                             progress, eta = payload.get("progress"), payload.get("eta")
                             progress = min(99.9, max(0, progress)) if isinstance(progress, (int, float)) and not isinstance(progress, bool) and math.isfinite(progress) else None
                             eta = eta if isinstance(eta, (int, float)) and not isinstance(eta, bool) and math.isfinite(eta) and eta >= 0 else None
@@ -584,13 +589,13 @@ class DesktopService:
                             if operation not in ("preparing", "encoding", "copying"):
                                 operation = "preparing" if status == "preparing" else "encoding"
                             task.update(status="converting", progress=progress, speed=None, eta=eta, operation=operation)
-                        elif status in ("finished", "converting"):
-                            task.update(status="finalizing", progress=None, speed=None, eta=None)
+                        elif status == "finished":
+                            task.update(status="finalizing", progress=None, speed=None, eta=None, operation=None)
                         elif status in ("downloading", "resuming"):
                             total = payload.get("total_bytes") or payload.get("total_bytes_estimate")
                             received = payload.get("downloaded_bytes") or 0
                             task.update(status="downloading", progress=min(99.9, received * 100 / total) if total else None,
-                                        downloaded_bytes=received, total_bytes=total, speed=payload.get("speed"), eta=payload.get("eta"))
+                                        downloaded_bytes=received, total_bytes=total, speed=payload.get("speed"), eta=payload.get("eta"), operation=None)
                     elif event == "result":
                         result = payload
                     elif event == "error":

@@ -38,6 +38,7 @@ class DownloadRequest:
     convert_to: str | None = None
     max_height: int | None = None
     max_size: int | None = None
+    desktop_conversion: bool = False
 
 
 @dataclass(frozen=True)
@@ -218,7 +219,12 @@ def download(
     if kind not in MEDIA_TYPES:
         raise DownloadError("Choose video, audio, or image. Files keep their original format.")
     target = normalize_conversion(request.convert_to) if request.convert_to else None
-    if target is not None and target not in CONVERSIONS:
+    if request.desktop_conversion:
+        from .desktop_download_formats import DOWNLOAD_TARGETS
+        allowed_targets = DOWNLOAD_TARGETS
+    else:
+        allowed_targets = CONVERSIONS
+    if target is not None and target not in allowed_targets:
         raise DownloadError("Unsupported conversion. Choose mp3, mp4, gif, png, or jpg.")
     if request.max_height is not None and kind == "audio":
         raise DownloadError("--max-height applies to video or animation, not audio.")
@@ -235,7 +241,11 @@ def download(
     _check_information(inspected.information, image=kind == "image")
     validate_inspected_limits(inspected, kind, target=target, max_height=request.max_height, max_size=request.max_size)
     if target:
-        validate_conversion(inspected, kind, target, max_height=request.max_height)
+        if request.desktop_conversion:
+            from .desktop_download_formats import validate_download_conversion
+            validate_download_conversion(inspected, kind, target, max_height=request.max_height)
+        else:
+            validate_conversion(inspected, kind, target, max_height=request.max_height)
     output_dir = Path(request.output_dir).expanduser().resolve()
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -283,6 +293,11 @@ def _download_original(url, kind, output_dir, inspected, progress_hook, logger, 
     source_tag = ".source" if kind == "audio" else ""
     max_size = getattr(request, "max_size", None)
     max_height = getattr(request, "max_height", None)
+    if (max_height is not None and getattr(request, "desktop_conversion", False)
+            and getattr(request, "convert_to", None) in ("mkv", "mov", "webm")):
+        # These shared video outputs pad to even pixels without resizing.
+        # Select a bounded source that still fits after that padding.
+        max_height -= max_height % 2
     def report(status):
         if resume_work:
             resume_work.progress(status)
@@ -310,7 +325,8 @@ def _download_original(url, kind, output_dir, inspected, progress_hook, logger, 
                 downloader.format_selector = limited_format_selector(
                     downloader, options["format"], "video" if inspected.animation_video else kind,
                     inspected.information, max_height=max_height, max_size=max_size,
-                    allow_resize=bool(getattr(request, "convert_to", None)),
+                    allow_resize=bool(getattr(request, "convert_to", None)) and
+                    (not getattr(request, "desktop_conversion", False) or request.convert_to in ("mp4", "gif")),
                 )
             for cookie in inspected.cookies:
                 downloader.cookiejar.set_cookie(deepcopy(cookie))
@@ -398,11 +414,19 @@ def _download_converted(url, kind, target, output_dir, inspected, progress_hook,
         if resume_work and (completed := resume_work.completed("converted")):
             return DownloadResult(title, completed)
         if progress_hook:
-            progress_hook({"status": "converting", "format": target})
-        created = convert_file(
-            original.path, target, destination, logger=logger,
-            max_height=getattr(request, "max_height", None), max_size=getattr(request, "max_size", None),
-        )
+            progress_hook({"status": "preparing" if getattr(request, "desktop_conversion", False) else "converting", "format": target})
+        if getattr(request, "desktop_conversion", False):
+            from .download_conversion import convert_downloaded_file
+            created = convert_downloaded_file(
+                original.path, target, destination, inspected=inspected, kind=kind,
+                logger=logger, progress_hook=progress_hook,
+                max_height=request.max_height, max_size=request.max_size,
+            )
+        else:
+            created = convert_file(
+                original.path, target, destination, logger=logger,
+                max_height=getattr(request, "max_height", None), max_size=getattr(request, "max_size", None),
+            )
         if resume_work:
             resume_work.remember("converted", destination)
     except OSError as error:

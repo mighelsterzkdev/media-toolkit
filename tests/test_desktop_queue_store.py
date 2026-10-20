@@ -74,6 +74,33 @@ class DesktopQueueStoreTests(unittest.TestCase):
         self.assertNotIn("http_headers", restored["_image"])
         self.assertNotIn("SECRET", self.store.path.read_text(encoding="utf-8"))
 
+    def test_expanded_download_outputs_survive_restart_with_exact_target(self):
+        targets = {
+            "image": ("png", "jpg", "webp", "avif", "bmp", "tiff", "ico", "tga", "gif", "jp2", "apng", "mp4", "mkv", "mov", "webm"),
+            "audio": ("mp3", "wav", "flac", "m4a", "aac", "opus", "ogg", "aiff"),
+            "video": ("mp4", "mkv", "mov", "webm"),
+        }
+        tasks = []
+        for kind, formats in targets.items():
+            for target in formats:
+                task = self.task(kind=kind, format=target)
+                task["_identity"] = (task["url"], kind, target, task["_settings"]["output"], None, None)
+                tasks.append(task)
+        self.assertTrue(self.store.save(tasks))
+        restored = self.store.load()
+        self.assertEqual([(task["kind"], task["format"]) for task in restored],
+                         [(task["kind"], task["format"]) for task in tasks])
+        self.assertTrue(all(task["status"] == "cancelled" and task["error"] == RESTORED_MESSAGE for task in restored))
+        self.assertEqual([task["_identity"] for task in restored], [task["_identity"] for task in tasks])
+
+    def test_invalid_download_category_cannot_replace_saved_queue(self):
+        self.assertTrue(self.store.save([self.task()]))
+        raw = self.store.path.read_bytes()
+        for kind, target in (("audio", "png"), ("image", "mp3"), ("animation", "apng"), (None, "webp"), ("video", "png")):
+            with self.subTest(kind=kind, target=target):
+                self.assertFalse(self.store.save([self.task(kind=kind, format=target)]))
+                self.assertEqual(self.store.path.read_bytes(), raw)
+
     def test_second_instance_cannot_overwrite_owner_queue_and_released_lock_is_reusable(self):
         owner_task = self.task()
         self.assertTrue(self.store.save([owner_task]))

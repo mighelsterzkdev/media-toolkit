@@ -15,8 +15,8 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from universal_downloader.dependencies import find_ffmpeg
-from universal_downloader.desktop_service import DesktopService, _asset_description, _thumbnail, safe_error
+from universal_downloader.dependencies import find_ffmpeg, hidden_process_options
+from universal_downloader.desktop_service import DesktopService, _asset_description, _asset_options, _thumbnail, safe_error
 from universal_downloader.desktop_queue_store import RESTORED_MESSAGE
 from universal_downloader.errors import DownloadError
 from universal_downloader.inspection import MediaInspection
@@ -32,6 +32,27 @@ class DesktopDescriptionTests(unittest.TestCase):
         self.assertEqual(_asset_description(video), "Up to 180p · 0:05")
         self.assertEqual(_asset_description(audio), "0:05")
         self.assertEqual(_asset_description(image), "640 × 360")
+
+    def test_expanded_options_use_descriptive_labels_and_keep_original_first(self):
+        preview = BytesIO()
+        Image.new("RGBA", (32, 16), (10, 20, 30, 100)).save(preview, "PNG")
+        inspected = MediaInspection("https://example.com/image", {}, ("image",), image_data=preview.getvalue())
+        options = _asset_options(inspected, {"max_height": None, "max_size": None})[0]["options"]
+        self.assertEqual(options[0]["id"], "original")
+        self.assertTrue(options[0]["recommended"])
+        labels = {option["id"]: option["label"] for option in options}
+        self.assertEqual(labels["webp"], "WebP image")
+        self.assertEqual(labels["gif"], "GIF image")
+        self.assertEqual(labels["jpg"], "JPEG image")
+        self.assertIn("bmp", labels)
+        self.assertIn("tiff", labels)
+        self.assertIn("tga", labels)
+        self.assertNotIn("png", labels)
+        self.assertNotIn("ico", labels)
+        self.assertNotIn("mp3", labels)
+        jpeg = next(option for option in options if option["id"] == "jpg")
+        self.assertIn("transparency", jpeg["description"].lower())
+        self.assertNotIn("selected background", jpeg["description"].lower())
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -171,6 +192,101 @@ class DesktopServiceTests(unittest.TestCase):
         state = self.wait(lambda state: state["tasks"][0]["status"] in ("completed", "failed"))
         self.assertEqual(state["tasks"][0]["status"], "completed", state)
         self.assertTrue(state["tasks"][0]["can_convert"])
+
+    def test_expanded_image_download_converts_actual_bytes_and_retries_after_restart(self):
+        inspection = self.inspect()
+        options = inspection["assets"][0]["kinds"][0]["options"]
+        self.assertIn("webp", {option["id"] for option in options})
+        with self.service._lock:
+            with self.assertRaises(DownloadError):
+                self.enqueue_inspected(inspection, output_format="mp3")
+            self.assertEqual(self.service.get_state()["tasks"], [])
+            self.enqueue_inspected(inspection, output_format="webp")
+            self.enqueue_inspected(inspection, output_format="webp")
+            self.assertEqual(len(self.service.get_state()["tasks"]), 1)
+            self.service.cancel_task(self.service.get_state()["tasks"][0]["id"])
+        state = self.restart()
+        task = state["tasks"][0]
+        self.assertEqual(task["format"], "webp")
+        self.assertEqual(task["status"], "cancelled")
+        self.assertIsNone(self.service._tasks[0]["_inspected"])
+        self.service.retry_task(task["id"])
+        state = self.wait(lambda state: state["tasks"][0]["status"] in ("completed", "failed"))
+        self.assertEqual(state["tasks"][0]["status"], "completed", state)
+        path = Path(state["tasks"][0]["path"])
+        self.assertEqual(path.suffix, ".webp")
+        with Image.open(path) as converted:
+            self.assertEqual(converted.format, "WEBP")
+            self.assertEqual(converted.size, (320, 200))
+        self.assertEqual(list(path.parent.glob("*.png")), [])
+
+    def test_animation_download_offers_only_frame_preserving_targets(self):
+        inspection = self.inspect("/animation.gif")
+        options = inspection["assets"][0]["kinds"][0]["options"]
+        targets = {option["id"] for option in options}
+        self.assertIn("apng", targets)
+        self.assertIn("webp", targets)
+        self.assertFalse(targets & {"png", "jpg", "bmp", "tiff", "ico", "tga", "jp2", "mp3"})
+        self.enqueue_inspected(inspection, output_format="apng")
+        state = self.wait(lambda state: state["tasks"][0]["status"] in ("completed", "failed"))
+        self.assertEqual(state["tasks"][0]["status"], "completed", state)
+        with Image.open(state["tasks"][0]["path"]) as converted:
+            self.assertEqual(converted.format, "PNG")
+            self.assertEqual(converted.n_frames, 2)
+            self.assertEqual(converted.info["loop"], 0)
+
+    def test_completed_expanded_image_retry_reuses_cache_after_inspection_bytes_are_released(self):
+        inspection = self.inspect()
+        self.enqueue_inspected(inspection, output_format="webp")
+        state = self.wait(lambda state: state["tasks"][0]["status"] in ("completed", "failed"))
+        self.assertEqual(state["tasks"][0]["status"], "completed", state)
+        first = state["tasks"][0]
+        self.assertIsNone(self.service._tasks[0]["_inspected"].image_data)
+        requests = list(_Handler.ranges)
+        self.service.retry_task(first["id"])
+        state = self.wait(lambda state: state["tasks"][0]["status"] in ("existing", "completed", "failed"))
+        self.assertEqual(state["tasks"][0]["status"], "existing", state)
+        self.assertEqual(state["tasks"][0]["path"], first["path"])
+        self.assertEqual(_Handler.ranges, requests)
+
+    @unittest.skipUnless(find_ffmpeg(), "FFmpeg/ffprobe required")
+    def test_download_audio_and_video_expanded_outputs_have_real_selected_containers(self):
+        tools = find_ffmpeg()
+        suffix = ".exe" if (tools / "ffmpeg.exe").is_file() else ""
+        fixture = self.root / "expanded.mp4"
+        subprocess.run([str(tools / f"ffmpeg{suffix}"), "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
+                        "-f", "lavfi", "-i", "color=c=blue:s=32x24:r=10:d=0.3",
+                        "-f", "lavfi", "-i", "sine=frequency=440:duration=0.3",
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(fixture)],
+                       check=True, capture_output=True, timeout=30, **hidden_process_options())
+        _Handler.bodies["/expanded.mp4"] = (fixture.read_bytes(), "video/mp4")
+        inspection = self.inspect("/expanded.mp4")
+        kinds = {kind["id"]: kind for kind in inspection["assets"][0]["kinds"]}
+        audio = {option["id"]: option for option in kinds["audio"]["options"]}
+        video = {option["id"]: option for option in kinds["video"]["options"]}
+        self.assertTrue({"mp3", "wav", "flac", "m4a", "aac", "opus", "ogg", "aiff"}.issubset(audio))
+        self.assertTrue({"mkv", "mov", "webm"}.issubset(video))
+        self.assertFalse(set(audio) & {"png", "gif", "mkv"})
+        self.assertFalse(set(video) & {"flac", "png", "gif"})
+        self.assertEqual(audio["flac"]["label"], "FLAC audio")
+        self.assertEqual(video["mkv"]["label"], "MKV video")
+        with self.service._lock:
+            self.enqueue_inspected(inspection, kind="audio", output_format="flac")
+            self.enqueue_inspected(inspection, kind="video", output_format="mkv")
+        state = self.wait(lambda state: len(state["tasks"]) == 2 and all(task["status"] in ("completed", "failed") for task in state["tasks"]))
+        self.assertTrue(all(task["status"] == "completed" for task in state["tasks"]), state)
+        for task in state["tasks"]:
+            path = Path(task["path"])
+            self.assertEqual(path.suffix, f'.{task["format"]}')
+            probe = subprocess.run([str(tools / f"ffprobe{suffix}"), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
+                                   check=True, capture_output=True, text=True, timeout=30, **hidden_process_options())
+            result = json.loads(probe.stdout)
+            if task["format"] == "flac":
+                self.assertEqual(result["format"]["format_name"], "flac")
+                self.assertEqual([stream["codec_type"] for stream in result["streams"]], ["audio"])
+            else:
+                self.assertIn("matroska", result["format"]["format_name"])
+                self.assertEqual({stream["codec_type"] for stream in result["streams"]}, {"audio", "video"})
 
     def test_local_conversions_share_the_download_queue_and_independent_inspection(self):
         source = self.root / "local.png"
@@ -458,6 +574,51 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertEqual([(item["progress"], item["eta"], item["operation"]) for item in observed],
                          [(None, None, "preparing"), (42.5, 7, "encoding"), (99.9, None, "copying"), (None, None, "encoding")])
         self.assertTrue(all(item["speed"] is None for item in observed))
+        self.assertEqual(self.service.get_state()["tasks"][0]["status"], "completed")
+
+    def test_download_then_conversion_progress_keeps_percent_separate_from_transfer_bytes(self):
+        inspection = self.inspect()
+        with self.service._lock:
+            self.enqueue_inspected(inspection, output_format="webp")
+            task = self.service._tasks[0]
+            task.update(status="downloading", _attempt="download-progress-test")
+        observed = []
+        service = self.service
+        destination = self.root / "downloads" / "downloaded.webp"
+
+        class Worker:
+            def begin(self, payload):
+                self.payload = payload
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (10, 10)).save(destination, "WEBP")
+
+            def events(self):
+                for payload in (
+                    {"status": "downloading", "downloaded_bytes": 25, "total_bytes": 100, "speed": 20, "eta": 4},
+                    {"status": "finished"},
+                    {"status": "preparing"},
+                    {"status": "converting", "operation": "copying", "progress": 42.5, "eta": 2, "speed": 1.2},
+                    {"status": "converting", "operation": "encoding", "progress": float("inf"), "eta": True},
+                ):
+                    yield "progress", payload
+                    observed.append(service.get_state()["tasks"][0])
+                yield "result", {"path": str(destination), "already_exists": False, "title": "downloaded", "can_convert": True}
+
+            def close(self):
+                pass
+
+        worker = Worker()
+        with patch.object(self.service, "_create_worker", return_value=worker):
+            self.service._run_task(task, "download-progress-test")
+        self.assertEqual(worker.payload["action"], "download")
+        self.assertEqual(worker.payload["format"], "webp")
+        self.assertEqual([(item["status"], item["progress"], item["eta"], item["operation"]) for item in observed],
+                         [("downloading", 25, 4, None), ("finalizing", None, None, None),
+                          ("converting", None, None, "preparing"), ("converting", 42.5, 2, "copying"),
+                          ("converting", None, None, "encoding")])
+        self.assertEqual(observed[0]["speed"], 20)
+        self.assertTrue(all(item["speed"] is None for item in observed[1:]))
+        self.assertTrue(all(item["downloaded_bytes"] == 25 for item in observed))
         self.assertEqual(self.service.get_state()["tasks"][0]["status"], "completed")
 
     def test_thumbnail_is_bounded_png_and_never_a_remote_url(self):

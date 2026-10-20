@@ -12,6 +12,7 @@ import re
 import tempfile
 from urllib.parse import urlsplit
 
+from .desktop_download_formats import DOWNLOAD_TARGETS_BY_KIND
 from .errors import DownloadError
 from .preferences import preferences_path
 from .urls import validate_url
@@ -22,7 +23,7 @@ RESTORED_MESSAGE = "Restored after restart. Retry to continue."
 _STATUSES = frozenset(("queued", "checking", "downloading", "preparing", "converting", "finalizing", "cancelling", "completed", "existing", "failed", "cancelled"))
 _TERMINAL = frozenset(("completed", "existing", "failed", "cancelled"))
 _KINDS = frozenset(("image", "audio", "video", "animation"))
-_FORMATS = frozenset(("original", "png", "jpg", "webp", "avif", "bmp", "tiff", "ico", "tga", "gif", "jp2", "apng", "mp3", "wav", "flac", "m4a", "aac", "opus", "ogg", "aiff", "mp4", "mkv", "mov", "webm"))
+_FORMATS = frozenset(("original",)).union(*DOWNLOAD_TARGETS_BY_KIND.values())
 
 
 def _string(value, limit, *, empty=False):
@@ -182,7 +183,7 @@ def _validate_record(value):
               "path": path, "error": error, "can_convert": value.get("can_convert") is True, "settings": settings}
     if action == "download":
         result["url"] = validate_url(_string(value.get("url"), 16_384))
-        if kind == "animation" or target not in ("original", "mp3", "mp4", "gif", "png", "jpg"):
+        if kind == "animation" or (target != "original" and target not in DOWNLOAD_TARGETS_BY_KIND.get(kind, ())):
             raise ValueError("invalid saved download format")
         selection = value.get("selection")
         result["selection"] = _selection(selection) if selection is not None else None
