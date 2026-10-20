@@ -315,7 +315,8 @@ def convert_local_file(media, target, output_dir, background="#FFFFFF", progress
 
             def encode_mp4(prepared, output):
                 _run_ffmpeg(ffmpeg, ["-protocol_whitelist", "file,pipe", "-f", "apng", "-ignore_loop", "1", "-i", str(prepared),
-                                     "-map", "0:v:0", "-map_metadata", "-1", *_video_arguments("mp4", audio=False)], output)
+                                     "-map", "0:v:0", "-map_metadata", "-1", "-fps_mode", "vfr",
+                                     *_video_arguments("mp4", audio=False)], output)
 
         return convert_animation(media, target, output_dir, background, progress_hook, work_dir=work_dir, encode_mp4=encode_mp4)
     if kind not in ("audio", "video"):

@@ -168,6 +168,20 @@ def verify(executable: Path | None = None):
                     image.seek(frame)
                     assert image.info["duration"] == 100
                     assert image.convert("RGB").getpixel((0, 0)) == ((255, 0, 0) if frame == 0 else (0, 0, 255))
+            if tools is not None:
+                assert "mp4" in files[animated.name]["targets"], files[animated.name]
+                api._tools["status"] = "ready"
+                require(api.enqueue_conversions([files[animated.name]["id"]], "mp4"))
+                state = wait_for(service, lambda value: value["tasks"][-1]["status"] in ("completed", "failed"))
+                animation_video = state["tasks"][-1]
+                assert animation_video["status"] == "completed", animation_video
+                result = subprocess.run([str(ffprobe), "-v", "error", "-count_frames", "-show_streams", "-show_format", "-of", "json", animation_video["path"]],
+                                        capture_output=True, text=True, timeout=20, check=True, **hidden_process_options())
+                metadata = json.loads(result.stdout)
+                assert len(metadata["streams"]) == 1, metadata
+                stream = metadata["streams"][0]
+                assert stream["codec_name"] == "h264" and int(stream["nb_read_frames"]) == 2, stream
+                assert abs(float(metadata["format"]["duration"]) - .2) < .03, metadata
             require(api.clear_conversion_files())
             service.add_conversion_files([str(path) for path in expanded])
             state = wait_for(service, lambda value: value["conversion"]["status"] != "checking")
@@ -224,7 +238,7 @@ def verify(executable: Path | None = None):
             require(api.clear_conversion_files())
             require(api.remove_finished())
             assert all(path.is_file() for path in completed)
-            av_result = "MP4 audio extraction and WebM conversion, " if video is not None else ""
+            av_result = "two-frame animation MP4 timing, MP4 audio extraction and WebM conversion, " if video is not None else ""
             print("Desktop workers passed: content inspection, AVIF/BMP/TIFF/ICO/GIF/JP2/TGA roundtrips, HEIC decoding, animation preservation, " + av_result + "atomic batch validation, JPEG background, lossless WebP, cancel/retry, completed-file shortcut, source preservation and private workspace cleanup.", flush=True)
         finally:
             service.shutdown()
