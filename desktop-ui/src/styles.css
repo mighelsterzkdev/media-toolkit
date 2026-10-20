@@ -65,13 +65,7 @@
   .kind-option { @apply relative flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-transparent px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground; }
   .kind-option.selected { @apply border-input bg-secondary text-secondary-foreground; }
   .kind-option:has(:focus-visible) { @apply ring-2 ring-ring ring-offset-2 ring-offset-background; }
-  .format-options { @apply flex flex-wrap gap-x-8 gap-y-4; }
-  .format-option { @apply flex min-h-12 cursor-pointer items-start gap-2 py-1; }
-  .format-option > button { @apply mt-1 shrink-0; }
-  .format-option-copy { @apply min-w-0; }
-  .format-title { @apply flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium leading-6; }
-  .recommended-badge { @apply inline-flex items-center rounded-md bg-secondary px-2 text-sm font-normal leading-6 text-secondary-foreground; }
-  .format-description { @apply block text-sm font-normal leading-6 text-muted-foreground; }
+  .download-format { @apply space-y-2; }
   .download-footer { @apply flex shrink-0 items-center justify-between gap-4 border-t py-4; }
   .folder-destination { @apply flex min-w-0 flex-1 items-center gap-2 text-muted-foreground; }
   .folder-destination > div { @apply min-w-0 flex-1; }
@@ -136,8 +130,8 @@
   .file-checkbox { @apply size-4 shrink-0 cursor-pointer rounded disabled:cursor-not-allowed disabled:opacity-50; accent-color: hsl(var(--primary)); }
   .conversion-options { @apply space-y-3 pb-4; }
   .conversion-options > .kind-options { @apply mb-0; }
-  .conversion-target-field { @apply flex flex-wrap items-center gap-x-4 gap-y-2; }
-  .conversion-target-field > button { @apply w-72 max-w-full; }
+  .download-target-field, .conversion-target-field { @apply flex flex-wrap items-center gap-x-4 gap-y-2; }
+  .download-target-field > button, .conversion-target-field > button { @apply w-72 max-w-full; }
   .conversion-format-count { @apply text-sm text-muted-foreground; }
   .conversion-file-copy > .conversion-file-skip { @apply text-amber-300; }
   .alpha-background { @apply flex flex-wrap items-center gap-x-6 gap-y-2; }
@@ -149,7 +143,6 @@
 @keyframes progress-slide { from { margin-left: -30%; } to { margin-left: 100%; } }
 @media (max-width: 760px) {
   .tools-notice { flex-wrap: wrap; }
-  .format-options { gap: 16px 24px; }
 }
 @media (max-width: 560px) {
   .app-header, .app-notices, .download-card, .convert-card, .downloads-section, .app-footer { padding-left: 16px; padding-right: 16px; }

@@ -4,6 +4,7 @@ import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
 import { Label } from './components/ui/label'
 import { RadioGroup, RadioGroupItem } from './components/ui/radio-group'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select'
 import { BatchDialog } from './components/BatchDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { TaskList } from './components/TaskList'
@@ -121,9 +122,15 @@ export default function App() {
             <RadioGroup value={kind.id} onValueChange={changeKind} aria-label="Media type" orientation="horizontal" className="kind-options flex flex-wrap gap-2">
               {asset.kinds.map(item => { const KindIcon = mediaIcon(item.id); return <Label key={item.id} className={`kind-option ${kind.id === item.id ? 'selected' : ''}`} htmlFor={`kind-${item.id}`}><RadioGroupItem id={`kind-${item.id}`} value={item.id} className="sr-only" /><KindIcon className="size-4" />{item.label}</Label> })}
             </RadioGroup>
-            <RadioGroup value={option.id} onValueChange={value => setSelection({ inspection: state.inspection.id, asset: asset.id, kind: kind.id, option: value })} aria-label="Download format" className="format-options flex flex-wrap gap-x-8 gap-y-4">
-              {kind.options.map(item => <Label key={item.id} htmlFor={`format-${item.id}`} className={`format-option ${option.id === item.id ? 'selected' : ''}`}><RadioGroupItem id={`format-${item.id}`} value={item.id} /><span className="format-option-copy"><span className="format-title">{item.label}{item.recommended ? <span className="recommended-badge">Recommended</span> : null}</span>{item.description ? <span className="format-description">{item.description}</span> : null}</span></Label>)}
-            </RadioGroup>
+            <div className="download-format">
+              <div className="download-target-field"><Label htmlFor="download-format">Save as</Label>
+                <Select value={option.id} onValueChange={value => setSelection({ inspection: state.inspection.id, asset: asset.id, kind: kind.id, option: value })} disabled={disconnected || busy || downloadBusy}>
+                  <SelectTrigger id="download-format" aria-describedby={option.description ? 'download-format-description' : undefined}><SelectValue /></SelectTrigger>
+                  <SelectContent>{kind.options.map(item => <SelectItem key={item.id} value={item.id} textValue={item.label}>{item.label}{item.recommended ? <span className="text-sm text-muted-foreground"> · Recommended</span> : null}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              {option.description ? <p id="download-format-description" className="field-help">{option.description}</p> : null}
+            </div>
           </div> : <p className="url-hint px-0">No format fits current limits. Change settings and check again.</p>}
         </div> : null}
         {!checking && !ready && !inspectionError ? <p className="url-hint">Check a link to see the available files and formats.</p> : null}
