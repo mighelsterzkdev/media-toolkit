@@ -338,6 +338,36 @@ class DesktopConversionTests(unittest.TestCase):
             image.seek(1)
             self.assertEqual(image.info["duration"], 200)
 
+    @unittest.skipUnless(find_ffmpeg(), "FFmpeg/ffprobe required")
+    def test_real_conversion_reports_measured_progress_before_completion(self):
+        tools = find_ffmpeg()
+        ffmpeg = tools / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+        source = self.root / "progress.mkv"
+        subprocess.run([str(ffmpeg), "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=5",
+                        "-c:v", "ffv1", "-threads", "2", str(source)], capture_output=True, check=True,
+                       timeout=30, **hidden_process_options())
+        selected = self.select(source)[0]
+        self.assertIsNone(selected["error"])
+        self.service.enqueue_conversions([selected["id"]], "webm")
+        measured = []
+        phases = set()
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            task = self.service.get_state()["tasks"][0]
+            if task["status"] == "converting":
+                phases.add(task.get("operation"))
+                if task["progress"] is not None:
+                    measured.append(task["progress"])
+            if task["status"] in ("completed", "failed", "cancelled"):
+                break
+            time.sleep(0.01)
+        self.assertEqual(task["status"], "completed", task)
+        self.assertIn("encoding", phases)
+        self.assertTrue(any(0 < value < 99 for value in measured), measured)
+        self.assertEqual(measured, sorted(measured))
+        self.assertEqual(task["progress"], 100)
+        self.assertEqual(list(self.output.glob(".unidown-convert-*")), [])
+
 
 if __name__ == "__main__":
     unittest.main()

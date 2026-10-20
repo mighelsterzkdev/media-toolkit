@@ -21,6 +21,7 @@ from PIL import Image, ImageOps
 from . import __version__
 from .conversions import available_conversions
 from .dependencies import PROJECT_ROOT, find_ffmpeg, find_js_runtime
+from .desktop_queue_store import DesktopQueueStore, RESTORED_MESSAGE, selection_descriptor, selection_identity
 from .desktop_worker import ProcessWorker
 from .errors import DownloadError
 from .limits import validate_inspected_limits, validate_limits
@@ -30,7 +31,7 @@ from .resume import pending_resumes
 from .urls import validate_url
 
 TERMINAL = frozenset(("completed", "existing", "failed", "cancelled"))
-ACTIVE = frozenset(("checking", "downloading", "converting", "finalizing", "cancelling"))
+ACTIVE = frozenset(("checking", "downloading", "preparing", "converting", "finalizing", "cancelling"))
 MAX_QUEUED_IMAGE_BYTES = 128 * 1024 * 1024
 MAX_CONVERSION_FILES = 100
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -138,9 +139,9 @@ def _asset_options(inspected, settings):
 
 
 class DesktopService:
-    """Own all transient URL metadata; the UI receives only a bounded view."""
+    """Own private checked media and a persisted queue; expose a bounded UI view."""
 
-    def __init__(self, default_output: Path | None = None):
+    def __init__(self, default_output: Path | None = None, *, queue_scope=None):
         self._lock = threading.RLock()
         self._wake = threading.Event()
         self._closed = False
@@ -161,6 +162,10 @@ class DesktopService:
             saved = {}
             self._notice = safe_error(error)
         self._settings = {"output": str(Path(saved.get("output") or default_output or PROJECT_ROOT / "downloads").expanduser().resolve()), "max_height": saved.get("max_height"), "max_size": saved.get("max_size")}
+        self._queue_store = DesktopQueueStore(default_output, queue_scope=queue_scope)
+        self._tasks = self._queue_store.load()
+        if self._queue_store.notice:
+            self._notice = self._queue_store.notice
         self._inspection = self._idle_inspection()
         self._conversion = self._idle_conversion()
         self._resume_time = 0
@@ -179,6 +184,11 @@ class DesktopService:
     def _ensure_open(self):
         if self._closed:
             raise DownloadError("The application is closing.")
+
+    def _persist_queue(self):
+        """Called under the service lock at durable mutations, never per poll."""
+        if not self._queue_store.save(self._tasks) and self._queue_store.notice:
+            self._notice = self._queue_store.notice
 
     def get_state(self):
         with self._lock:
@@ -427,16 +437,24 @@ class DesktopService:
                 self._tasks.append({"id": uuid4().hex, "url": "", "title": _text(image["name"], 300), "action": "convert",
                                     "source_format": image["format"], "can_convert": False, "kind": image.get("media_type", "image"), "format": target,
                                     "status": "queued", "progress": None, "downloaded_bytes": 0, "total_bytes": None,
-                                    "speed": None, "eta": None, "path": None, "error": None,
+                                    "speed": None, "eta": None, "path": None, "error": None, "operation": None,
                                     "_identity": identity, "_settings": deepcopy(settings), "_image": image,
                                     "_background": background, "_inspected": None, "_attempt": None})
+            self._persist_queue()
             self._wake.set()
         return self.get_state()
 
-    def _add_task(self, url, inspected=None, kind=None, output_format="original"):
+    def _add_task(self, url, inspected=None, kind=None, output_format="original", *, retry_url=None):
         settings = deepcopy(self._settings)
         policy = "default" if kind is None or (inspected and kind == inspected.kinds[0]) else kind
+        selection = selection_descriptor(inspected) if inspected is not None else None
+        asset_url = url
+        url = retry_url or url
         identity = (url, policy, output_format, settings["output"], settings["max_height"], settings["max_size"])
+        if inspected is not None and asset_url != url:
+            # A page may expose several signed asset links. Keep the stable
+            # page as the retry URL and distinguish its explicitly chosen asset.
+            identity += (selection_identity(selection),)
         for task in self._tasks:
             if task["_identity"] == identity and task["status"] not in TERMINAL:
                 return task
@@ -448,11 +466,12 @@ class DesktopService:
             buffers[id(inspected.image_data)] = len(inspected.image_data)
             if sum(buffers.values()) > MAX_QUEUED_IMAGE_BYTES:
                 raise DownloadError("The queue is holding too much image data. Wait for active downloads or clear finished items before adding more.")
-        task = {"id": uuid4().hex, "url": url, "title": _text(inspected.information.get("title") or "Download", 300) if inspected else url,
+        task = {"id": uuid4().hex, "url": url, "title": _text(inspected.information.get("title") or "Download", 300) if inspected else _text(url, 300),
                 "action": "download", "source_format": None, "can_convert": False,
                 "kind": kind, "format": output_format, "status": "queued", "progress": None,
-                "downloaded_bytes": 0, "total_bytes": None, "speed": None, "eta": None, "path": None, "error": None,
-                "_identity": identity, "_settings": settings, "_inspected": inspected, "_attempt": None}
+                "downloaded_bytes": 0, "total_bytes": None, "speed": None, "eta": None, "path": None, "error": None, "operation": None,
+                "_identity": identity, "_settings": settings, "_inspected": inspected,
+                "_selection": selection, "_attempt": None}
         self._tasks.append(task)
         return task
 
@@ -477,7 +496,8 @@ class DesktopService:
             if not compatible or output_format not in {option["id"] for option in compatible["options"]}:
                 raise DownloadError("Choose an available media type and format from this media check.")
             inspected = self._assets[asset_id]
-            self._add_task(inspected.url, inspected, kind, output_format)
+            self._add_task(inspected.url, inspected, kind, output_format, retry_url=self._inspection["url"])
+            self._persist_queue()
             self._wake.set()
         return self.get_state()
 
@@ -492,6 +512,7 @@ class DesktopService:
                 raise DownloadError("The queue supports up to 1,000 items. Remove finished items first.")
             for url in urls:
                 self._add_task(url)
+            self._persist_queue()
             self._wake.set()
         return self.get_state()
 
@@ -507,6 +528,9 @@ class DesktopService:
                     task["status"] = "converting" if task["action"] == "convert" else ("checking" if task["_inspected"] is None else "downloading")
                     task["_attempt"] = uuid4().hex
                     attempt = task["_attempt"]
+                    if task["action"] == "convert":
+                        task["operation"] = "preparing"
+                    self._persist_queue()
             if task:
                 self._run_task(task, attempt)
                 self._wake.set()
@@ -533,6 +557,8 @@ class DesktopService:
             if worker is None:
                 return
             payload = {"action": task["action"], "url": task["url"], "inspected": task["_inspected"], "kind": task["kind"], "format": task["format"], "settings": task["_settings"]}
+            if task["_inspected"] is None and task.get("_selection") is not None:
+                payload["selection"] = task["_selection"]
             if task["action"] == "convert":
                 output = Path(task["_settings"]["output"]).resolve()
                 try:
@@ -550,8 +576,14 @@ class DesktopService:
                         task.update(title=_text(payload["title"], 300), kind=payload["kind"], status="downloading")
                     elif event == "progress":
                         status = payload["status"]
-                        if task["action"] == "convert" and status == "converting":
-                            task.update(status="converting", progress=None, speed=None, eta=None)
+                        if task["action"] == "convert" and status in ("preparing", "converting"):
+                            progress, eta = payload.get("progress"), payload.get("eta")
+                            progress = min(99.9, max(0, progress)) if isinstance(progress, (int, float)) and not isinstance(progress, bool) and math.isfinite(progress) else None
+                            eta = eta if isinstance(eta, (int, float)) and not isinstance(eta, bool) and math.isfinite(eta) and eta >= 0 else None
+                            operation = payload.get("operation")
+                            if operation not in ("preparing", "encoding", "copying"):
+                                operation = "preparing" if status == "preparing" else "encoding"
+                            task.update(status="converting", progress=progress, speed=None, eta=eta, operation=operation)
                         elif status in ("finished", "converting"):
                             task.update(status="finalizing", progress=None, speed=None, eta=None)
                         elif status in ("downloading", "resuming"):
@@ -576,7 +608,7 @@ class DesktopService:
                         raise DownloadError("The media worker did not produce a completed output file.")
                     task.update(status="existing" if result["already_exists"] else "completed", progress=100,
                                 path=str(path), title=_text(result["title"], 300), error=None, speed=None, eta=None,
-                                can_convert=bool(result.get("can_convert")))
+                                can_convert=bool(result.get("can_convert")), operation=None)
                 else:
                     message = "The file conversion stopped before completing. Retry to convert it again." if task["action"] == "convert" else "The media worker stopped before completing the download. Retry to continue a supported partial download."
                     raise DownloadError(message)
@@ -589,12 +621,13 @@ class DesktopService:
                 if task["status"] in ("cancelled", "cancelling") or self._closed:
                     task["status"] = "cancelled"
                 else:
-                    task.update(status="failed", error=safe_error(error), progress=None, speed=None, eta=None)
+                    task.update(status="failed", error=safe_error(error), progress=None, speed=None, eta=None, operation=None)
                 self._compact_task(task)
         finally:
             stop_worker()
             with self._lock:
                 self._resume_time = 0
+                self._persist_queue()
 
     def _find_task(self, identifier):
         task = next((task for task in self._tasks if task["id"] == identifier), None)
@@ -618,9 +651,10 @@ class DesktopService:
             worker.close()
         with self._lock:
             task["_attempt"] = None
-            task.update(status="cancelled", speed=None, eta=None, error=None)
+            task.update(status="cancelled", speed=None, eta=None, error=None, operation=None)
             self._compact_task(task)
             self._resume_time = 0
+            self._persist_queue()
             self._wake.set()
         return self.get_state()
 
@@ -633,13 +667,15 @@ class DesktopService:
             for other in self._tasks:
                 if other is not task and other["_identity"] == task["_identity"] and other["status"] not in TERMINAL:
                     raise DownloadError("This item is already in the queue.")
-            task.update(status="queued", progress=None, downloaded_bytes=0, total_bytes=None, speed=None, eta=None, path=None, error=None, can_convert=False)
+            task.update(status="queued", progress=None, downloaded_bytes=0, total_bytes=None, speed=None, eta=None, path=None, error=None, can_convert=False, operation=None)
+            self._persist_queue()
             self._wake.set()
         return self.get_state()
 
     def remove_finished(self):
         with self._lock:
             self._tasks = [task for task in self._tasks if task["status"] not in TERMINAL]
+            self._persist_queue()
         return self.get_state()
 
     def save_settings(self, settings):
@@ -696,8 +732,11 @@ class DesktopService:
             self._local_images = {}
             for task in self._tasks:
                 if task["status"] not in TERMINAL:
-                    task["status"] = "cancelled"
+                    task.update(status="cancelled", error=RESTORED_MESSAGE, speed=None, eta=None, operation=None)
+            self._persist_queue()
             self._wake.set()
         for worker in workers:
             worker.close()
         self._queue_thread.join(timeout=3)
+        with self._lock:
+            self._queue_store.close()

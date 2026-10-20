@@ -118,6 +118,8 @@ def build(output: Path) -> Path:
         "Audio: MP3, WAV, FLAC, M4A, AAC, Opus, Ogg, AIFF. Video: MP4, MKV, MOV, WebM.\n"
         "Animations: GIF, animated WebP, APNG, MP4. Original files are preserved.\n"
         "Images work offline. Audio/video conversion and MP4 animation output need FFmpeg/ffprobe.\n"
+        "Conversions show measured progress when available; compatible streams are copied without re-encoding.\n"
+        "The queue is saved locally. After reopening, use Retry to continue unfinished tasks. Nothing restarts automatically.\n"
         "Use the queue for several links. Nothing starts until you explicitly add downloads.\n"
         "Click Install tools if needed to prepare checksum-pinned FFmpeg/Deno archives from their publishers.\n"
         "Downloads default to downloads/ beside this program. Settings persist in local application data.\n\n"

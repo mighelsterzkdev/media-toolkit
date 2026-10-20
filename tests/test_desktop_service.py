@@ -17,6 +17,7 @@ from PIL import Image
 
 from universal_downloader.dependencies import find_ffmpeg
 from universal_downloader.desktop_service import DesktopService, _asset_description, _thumbnail, safe_error
+from universal_downloader.desktop_queue_store import RESTORED_MESSAGE
 from universal_downloader.errors import DownloadError
 from universal_downloader.inspection import MediaInspection
 
@@ -37,6 +38,7 @@ class _Handler(BaseHTTPRequestHandler):
     bodies = {}
     ranges = []
     slow = False
+    rejected = set()
 
     def log_message(self, *args): pass
 
@@ -45,6 +47,9 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _serve(self, head):
         path = self.path.split("?", 1)[0]
+        if self.path in self.rejected:
+            self.send_error(404)
+            return
         if path == "/slow.html":
             time.sleep(1)
         if path not in self.bodies:
@@ -110,6 +115,7 @@ class DesktopServiceTests(unittest.TestCase):
         environment.start(); self.addCleanup(environment.stop)
         _Handler.slow = False
         _Handler.ranges = []
+        _Handler.rejected = set()
         self.service = DesktopService(self.root / "downloads")
         self.addCleanup(self.service.shutdown)
 
@@ -130,6 +136,12 @@ class DesktopServiceTests(unittest.TestCase):
 
     def enqueue_inspected(self, inspection, asset_index=0, kind="image", output_format="original"):
         return self.service.enqueue(inspection["id"], inspection["assets"][asset_index]["id"], kind, output_format)
+
+    def restart(self):
+        self.service.shutdown()
+        self.service = DesktopService(self.root / "downloads")
+        self.addCleanup(self.service.shutdown)
+        return self.service.get_state()
 
     def test_checked_original_requires_explicit_enqueue_and_returns_private_raster_preview(self):
         inspection = self.inspect()
@@ -302,6 +314,151 @@ class DesktopServiceTests(unittest.TestCase):
         self.service.shutdown()
         with self.assertRaises(DownloadError):
             self.service.enqueue_links(self.base + "/image.png")
+
+    def test_restart_restores_completed_history_and_remove_finished_is_durable(self):
+        self.service.enqueue_links(self.base + "/image.png")
+        state = self.wait(lambda state: state["tasks"][0]["status"] in ("completed", "failed"))
+        self.assertEqual(state["tasks"][0]["status"], "completed", state)
+        identifier = state["tasks"][0]["id"]
+        output = Path(state["tasks"][0]["path"])
+        state = self.restart()
+        self.assertEqual(state["tasks"][0]["id"], identifier)
+        self.assertEqual(self.service.completed_path(identifier), output)
+        self.assertEqual(state["tasks"][0]["status"], "completed")
+        self.service.remove_finished()
+        self.assertEqual(self.restart()["tasks"], [])
+
+    def test_restart_never_auto_downloads_and_retries_exact_second_gallery_image(self):
+        _Handler.bodies["/expiring.html"] = (b'<html><head><title>Gallery</title></head><body><img src="/image.png"><img src="/other.jpg?token=old"></body></html>', "text/html")
+        inspection = self.inspect("/expiring.html")
+        with self.service._lock:
+            self.enqueue_inspected(inspection, 0)
+            state = self.enqueue_inspected(inspection, 1)
+            self.assertEqual(len(state["tasks"]), 2)
+            self.assertTrue(all(task["url"] == self.base + "/expiring.html" for task in state["tasks"]))
+            identifier = state["tasks"][1]["id"]
+            self.service.shutdown()
+        _Handler.bodies["/expiring.html"] = (b'<html><head><title>Gallery</title></head><body><img src="/image.png"><img src="/other.jpg?token=new"></body></html>', "text/html")
+        _Handler.rejected = {"/other.jpg?token=old"}
+        self.assertNotIn("token=old", self.service._queue_store.path.read_text(encoding="utf-8"))
+        before = list(_Handler.ranges)
+        state = self.restart()
+        self.assertEqual(state["tasks"][0]["status"], "cancelled")
+        self.assertEqual(state["tasks"][0]["error"], RESTORED_MESSAGE)
+        self.assertFalse(self.service.active_jobs())
+        time.sleep(0.15)
+        self.assertEqual(_Handler.ranges, before)
+        self.assertFalse((self.root / "downloads").exists())
+        self.service.retry_task(identifier)
+        state = self.wait(lambda state: state["tasks"][1]["status"] in ("completed", "failed"))
+        self.assertEqual(state["tasks"][0]["status"], "cancelled", state)
+        self.assertEqual(state["tasks"][1]["status"], "completed", state)
+        self.assertEqual(Path(state["tasks"][1]["path"]).read_bytes(), _Handler.bodies["/other.jpg"][0])
+
+    def test_restored_local_conversion_revalidates_fingerprint_before_retry(self):
+        source = self.root / "local.png"
+        source.write_bytes(_Handler.bodies["/image.png"][0])
+        self.service.add_conversion_files([source])
+        state = self.wait(lambda state: state["conversion"]["status"] == "ready")
+        with self.service._lock:
+            self.service.enqueue_conversions([state["conversion"]["files"][0]["id"]], "jpg")
+            identifier = self.service.get_state()["tasks"][0]["id"]
+            self.service.shutdown()
+        state = self.restart()
+        self.assertEqual(state["tasks"][0]["status"], "cancelled")
+        self.assertEqual(state["tasks"][0]["error"], RESTORED_MESSAGE)
+        source.write_bytes(_Handler.bodies["/other.jpg"][0])
+        self.service.retry_task(identifier)
+        state = self.wait(lambda state: state["tasks"][0]["status"] in ("completed", "failed"))
+        self.assertEqual(state["tasks"][0]["status"], "failed", state)
+        self.assertIn("source file changed", state["tasks"][0]["error"])
+        self.assertFalse(list((self.root / "downloads").glob("*.jpg")))
+
+    def test_restored_local_conversion_can_retry_unchanged_source(self):
+        source = self.root / "local.png"
+        source.write_bytes(_Handler.bodies["/image.png"][0])
+        self.service.add_conversion_files([source])
+        state = self.wait(lambda state: state["conversion"]["status"] == "ready")
+        with self.service._lock:
+            self.service.enqueue_conversions([state["conversion"]["files"][0]["id"]], "jpg")
+            identifier = self.service.get_state()["tasks"][0]["id"]
+            self.service.shutdown()
+        self.restart()
+        self.service.retry_task(identifier)
+        state = self.wait(lambda state: state["tasks"][0]["status"] in ("completed", "failed"))
+        self.assertEqual(state["tasks"][0]["status"], "completed", state)
+        with Image.open(state["tasks"][0]["path"]) as converted:
+            self.assertEqual(converted.format, "JPEG")
+            self.assertEqual(converted.size, (320, 200))
+
+    def test_secondary_instance_has_volatile_queue_and_cannot_remove_owner_history(self):
+        self.service.enqueue_links(self.base + "/image.png")
+        state = self.wait(lambda state: state["tasks"][0]["status"] in ("completed", "failed"))
+        self.assertEqual(state["tasks"][0]["status"], "completed", state)
+        other = DesktopService(self.root / "downloads")
+        self.addCleanup(other.shutdown)
+        self.assertIn("will not be saved", other.get_state()["notice"])
+        self.assertEqual(other.get_state()["tasks"], [])
+        other.remove_finished()
+        other.shutdown()
+        self.assertEqual(self.restart()["tasks"][0]["status"], "completed")
+
+    def test_queue_scope_stays_anchored_when_output_preference_changes(self):
+        original_state_path = self.service._queue_store.path
+        self.service.save_settings({"output": str(self.root / "chosen-output")})
+        self.service.enqueue_links(self.base + "/image.png")
+        state = self.wait(lambda state: state["tasks"][0]["status"] in ("completed", "failed"))
+        self.assertEqual(state["tasks"][0]["status"], "completed", state)
+        state = self.restart()
+        self.assertEqual(self.service._queue_store.path, original_state_path)
+        self.assertEqual(len(state["tasks"]), 1)
+        self.assertEqual(Path(state["tasks"][0]["path"]).parent, self.root / "chosen-output")
+
+    def test_save_failure_is_informational_and_does_not_block_queue(self):
+        with patch.object(self.service._queue_store, "save", return_value=False):
+            self.service._queue_store.notice = "The queue could not be saved. Current tasks can continue."
+            self.service.enqueue_links(self.base + "/image.png")
+            state = self.wait(lambda state: state["tasks"][0]["status"] in ("completed", "failed"))
+        self.assertEqual(state["tasks"][0]["status"], "completed", state)
+        self.assertIn("could not be saved", state["notice"])
+
+    def test_conversion_progress_preserves_measurements_and_sanitizes_worker_fields(self):
+        source = self.root / "local.png"
+        source.write_bytes(_Handler.bodies["/image.png"][0])
+        self.service.add_conversion_files([source])
+        state = self.wait(lambda state: state["conversion"]["status"] == "ready")
+        with self.service._lock:
+            self.service.enqueue_conversions([state["conversion"]["files"][0]["id"]], "jpg")
+            task = self.service._tasks[0]
+            task.update(status="converting", _attempt="progress-test")
+        observed = []
+        service = self.service
+        destination = self.root / "downloads" / "local.jpg"
+
+        class Worker:
+            def begin(self, payload):
+                Image.new("RGB", (10, 10)).save(destination, "JPEG")
+
+            def events(self):
+                for payload in (
+                    {"status": "preparing", "operation": "preparing"},
+                    {"status": "converting", "operation": "encoding", "progress": 42.5, "eta": 7, "speed": 999},
+                    {"status": "converting", "operation": "copying", "progress": 200, "eta": -3},
+                    {"status": "converting", "operation": "unknown", "progress": float("nan"), "eta": True},
+                ):
+                    yield "progress", payload
+                    observed.append(service.get_state()["tasks"][0])
+                yield "result", {"path": str(destination), "already_exists": False, "title": "local.png", "can_convert": True}
+
+            def close(self):
+                pass
+
+        with patch.object(self.service, "_create_worker", return_value=Worker()):
+            self.service._run_task(task, "progress-test")
+        self.assertEqual([(item["progress"], item["eta"], item["operation"]) for item in observed],
+                         [(None, None, "preparing"), (42.5, 7, "encoding"), (99.9, None, "copying"), (None, None, "encoding")])
+        self.assertTrue(all(item["speed"] is None for item in observed))
+        self.assertEqual(self.service.get_state()["tasks"][0]["status"], "completed")
 
     def test_thumbnail_is_bounded_png_and_never_a_remote_url(self):
         data = BytesIO()

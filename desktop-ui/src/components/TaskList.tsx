@@ -34,7 +34,9 @@ export function TaskList({ tasks, disabled, retryDisabled, onCancel, onRetry, on
         const done = completed.has(task.status)
         const failed = task.status === 'failed'
         const isActive = active.has(task.status)
-        const progress = task.progress == null ? null : Math.max(0, Math.min(100, task.progress))
+        const progress = task.progress == null || !Number.isFinite(task.progress) ? null : Math.max(0, Math.min(100, task.progress))
+        const converting = task.status === 'converting'
+        const operation = task.operation === 'preparing' ? 'Preparing file…' : task.operation === 'copying' ? 'Copying streams…' : 'Encoding file…'
         const Icon = done ? Check : failed ? AlertCircle : task.status === 'queued' ? Clock3 : task.status === 'cancelled' ? X : LoaderCircle
         return <li key={task.id} className="task-row" aria-label={`${task.title || sourceHost(task.url)}: ${labels[task.status]}`}>
           <div className={`task-icon ${done ? 'task-icon-done' : ''} ${failed ? 'task-icon-failed' : ''}`}>
@@ -47,10 +49,12 @@ export function TaskList({ tasks, disabled, retryDisabled, onCancel, onRetry, on
               {task.format ? <><span className="dot">·</span><span>{task.action === 'convert' && task.source_format ? `${task.source_format.toUpperCase()} → ` : ''}{task.format === 'original' ? 'Original' : task.format.toUpperCase()}</span></> : null}
               {!done && task.downloaded_bytes > 0 ? <><span className="dot">·</span><span>{bytes(task.downloaded_bytes)}{task.total_bytes ? ` / ${bytes(task.total_bytes)}` : ''}</span></> : null}
               {task.speed && task.status === 'downloading' ? <><span className="dot">·</span><span>{bytes(task.speed)}/s</span></> : null}
-              {task.eta != null && task.status === 'downloading' ? <span className="task-eta">{duration(task.eta)}</span> : null}
+              {converting && progress != null ? <><span className="dot">·</span><span>{Math.floor(progress)}%</span></> : null}
+              {task.eta != null && (task.status === 'downloading' || converting && progress != null) ? <span className="task-eta">{duration(task.eta)}</span> : null}
             </div>
             {task.status === 'downloading' ? <Progress value={progress} aria-label={`Download progress for ${task.title}`} className={progress == null ? 'progress-indeterminate' : ''} /> : null}
-            {task.status === 'converting' ? <p className="task-operation" role="status">Encoding file…</p> : null}
+            {converting && progress != null ? <Progress value={progress} aria-label={`Conversion progress for ${task.title}`} /> : null}
+            {converting ? <p className="task-operation" role="status">{operation}</p> : null}
             {task.error ? <p className="task-error">{task.error}</p> : null}
           </div>
           <div className="task-actions">

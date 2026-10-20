@@ -35,7 +35,7 @@ Open **start.cmd** for the dark desktop interface. It uses bundled React and sha
 4. Use **Add multiple links** for several URLs. This explicitly queues each link's recommended original; ambiguous pages report that they need individual selection.
 5. Use **Browse** to select the download folder and **Settings** for optional limits. These use the same remembered preferences as the terminal.
 
-Checks, downloads and conversions run in contained worker processes. Cancelling or closing stops the worker and its child tools without freezing the window. Supported interrupted transfers can be retried later. The queue itself is session-only; URLs and media choices are not saved between launches. Existing verified media and interrupted work still use the shared download engine's local history.
+Checks, downloads and conversions run in contained worker processes. Cancelling or closing stops the worker and its child tools without freezing the window. The desktop queue is saved locally and restored when the app reopens. Unfinished tasks wait for an explicit **Retry**; reopening the app does not start downloads or conversions. Supported interrupted transfers reuse verified partial work. Restored selected media is checked again before retry; ambiguous or changed selections require checking the link again instead of choosing another item.
 
 The desktop app is tested on Windows x64 and requires the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), normally available on Windows 11. The app uses its own private renderer profile under local application data and does not access your signed-in browser. It loads only the packaged interface and does not open downloaded web pages inside the privileged window.
 
@@ -61,8 +61,10 @@ Image inputs include JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF, GIF, ICO, TGA,
 - Image inputs are limited to 128 MiB and 40 million pixels; animations have additional decoded-frame limits. Available formats reflect the source, its streams and installed codecs. Native copies are omitted.
 - A file changed after inspection must be added again. Queued tasks keep their own source, target, background and destination snapshots.
 - The shared queue supports cancellation, retry and opening completed output folders. Switching tabs preserves selections and running operations.
+- Initial format selection stays within the source category: a video starts with a video output, while audio extraction remains an explicit choice. Selected formats stay stable while inspecting the same selection.
+- Audio/video conversions show measured progress and an estimated remaining time when available. Source preparation and operations with no trustworthy duration remain indeterminate.
 
-MP4/MKV/MOV use H.264 video and AAC audio; WebM uses VP9 and Opus. Video conversions keep the first video and first audio stream. Audio extraction uses the first audio stream, and silent video does not offer audio targets. Output notes describe compression, transparency and omitted tracks. Local conversion re-encodes media and does not preserve every source metadata field; use the downloader's **Original** option when an unchanged available source is wanted.
+MP4/MKV/MOV use compatible H.264 video and AAC audio; WebM uses VP9 and Opus. Compatible encoded streams are copied when possible, avoiding unnecessary quality loss and processing; incompatible streams are encoded with the existing profiles. The output notes describe which streams are copied or encoded. Video conversions keep the first video and first audio stream. Audio extraction uses the first audio stream, and silent video does not offer audio targets. Local conversion does not preserve every source metadata field; use the downloader's **Original** option when an unchanged available source is wanted.
 
 ## Windows portable release
 
@@ -75,7 +77,7 @@ Downloads go into the extracted folder's `downloads` directory when launched thr
 
 ```powershell
 # Check the ZIP against the published checksum before extraction
-Get-FileHash .\media-toolkit-0.9.0-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\media-toolkit-0.10.0-windows-x64.zip -Algorithm SHA256
 
 # Prepare the external tools without opening the menu
 .\unidown.exe --install-tools
@@ -217,6 +219,8 @@ Explicit `--output`, `--max-height`, and `--max-size` values are remembered for 
 
 Settings live in `preferences.json` inside the app's local state directory, alongside the download history. Existing installations retain their legacy `UniversalDownloader` / `universal-downloader` state directories so the new app name keeps their saved preferences and verified history. Only output folder and limits are saved. URLs, cookies, credentials, media types, and conversion choices are not stored as preferences. Choosing a format in one interactive download does not silently convert the next one.
 
+The desktop queue has a separate bounded local state file. It records task URLs, local source/output paths, selected formats and settings needed to restore tasks. It does not store cookies, authentication headers, extractor sessions or embedded media bytes. Pending tasks are restored as stopped, with **Retry** available. Completed entries remain available until **Clear finished** is used; clearing an entry does not delete its media. A second app instance cannot overwrite a queue already owned by another instance. The app explains when queue recovery is unavailable while allowing work to continue.
+
 ## Existing files and download history
 
 Files are identified by their source, provider ID or canonical URL, asset role, and requested output settings. A matching title and ID from another source is not enough to count as an existing download.
@@ -273,9 +277,9 @@ Run on Windows x64 using a separate build environment:
 ```powershell
 python -B -m venv .tools/build-env
 .\.tools\build-env\Scripts\python.exe -B -m pip install -c constraints.txt -e . pyinstaller==6.22.3
-.\.tools\build-env\Scripts\python.exe -B scripts/build_windows_gui.py --output dist/release-0.8.0
-.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/release-0.8.0/media-toolkit-0.8.0-windows-x64/unidown.exe --bootstrap
-.\.tools\build-env\Scripts\python.exe -B scripts/verify_desktop.py dist/release-0.8.0/media-toolkit-0.8.0-windows-x64/media-toolkit.exe
+.\.tools\build-env\Scripts\python.exe -B scripts/build_windows_gui.py --output dist/release-0.10.0
+.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/release-0.10.0/media-toolkit-0.10.0-windows-x64/unidown.exe --bootstrap
+.\.tools\build-env\Scripts\python.exe -B scripts/verify_desktop.py dist/release-0.10.0/media-toolkit-0.10.0-windows-x64/media-toolkit.exe
 ```
 
 Use a new output directory for each build. The desktop build produces both executables, their separate library folders, a complete ZIP, and `SHA256SUMS.txt`. `scripts/build_windows.py` remains available for a terminal-only ZIP. The committed frontend assets and notices are included without installing Node.js on the build machine. It checks the executable archive to exclude optional Mutagen and build-time PyInstaller modules. The verifier removes Python and external tools from PATH, checks the bundled executable, preserves local image/video originals, converts GIF animation to H.264 MP4, extracts original AAC audio, converts MP3, verifies cached reuse, runs a link queue, checks remembered preferences, and terminates/restarts a real frozen HTTP download to verify continuation. Its temporary download history is isolated from the user's history. The **Build portable Windows release** workflow builds and checks the same artifacts on tagged versions or manual runs; it does not publish a release automatically.

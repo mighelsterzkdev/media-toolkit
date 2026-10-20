@@ -54,15 +54,40 @@ def _worker_main(connection):
         if payload["action"] == "convert":
             from .local_media import convert_local_file
 
-            connection.send(("progress", {"status": "converting"}))
+            previous_conversion = 0.0
+            previous_operation = None
+
+            def conversion_progress(event):
+                nonlocal previous_conversion, previous_operation
+                status = event.get("status")
+                operation = event.get("operation")
+                if status == "preparing":
+                    operation = "preparing"
+                elif operation not in ("preparing", "encoding", "copying"):
+                    operation = "encoding"
+                now = time.monotonic()
+                measured = _number(event.get("progress"))
+                if operation == previous_operation and now - previous_conversion < 0.1 and (measured is None or measured < 99.9):
+                    return
+                previous_conversion, previous_operation = now, operation
+                connection.send(("progress", {"status": "converting", "operation": operation,
+                                             "progress": min(99.9, measured) if measured is not None else None,
+                                             "eta": _number(event.get("eta")), "speed": _number(event.get("speed"))}))
+
+            conversion_progress({"status": "preparing"})
             path = convert_local_file(payload["image"], payload["format"], Path(payload["settings"]["output"]),
-                                       background=payload["background"], work_dir=Path(payload["work_dir"]))
+                                       background=payload["background"], work_dir=Path(payload["work_dir"]), progress_hook=conversion_progress)
             connection.send(("result", {"title": payload["image"]["name"], "path": str(path), "already_exists": False, "can_convert": True}))
             return
         if payload["action"] != "download":
             raise DownloadError("This media operation is not supported.")
         inspected = payload.get("inspected")
         kind = payload.get("kind")
+        if inspected is None and payload.get("selection") is not None:
+            from .desktop_queue_store import resolve_restored_selection
+
+            inspected = resolve_restored_selection(payload["selection"], inspect_media(payload["url"], logger=_QuietLogger()))
+            inspected.validate_format(kind)
         if inspected is None:
             inspected = inspect_media(payload["url"], logger=_QuietLogger())
             if inspected.alternatives:

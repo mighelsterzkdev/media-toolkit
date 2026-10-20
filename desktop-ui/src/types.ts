@@ -22,7 +22,8 @@ export interface DownloadTask {
   id: string; url: string; title: string; kind: string | null; format: string; status: TaskStatus;
   progress: number | null; downloaded_bytes: number; total_bytes: number | null; speed: number | null;
   eta: number | null; path: string | null; error: string | null;
-  action?: 'download' | 'convert'; source_format?: string | null; can_convert?: boolean
+  action?: 'download' | 'convert'; source_format?: string | null; can_convert?: boolean;
+  operation?: 'preparing' | 'encoding' | 'copying' | null
 }
 export interface DesktopState {
   version: string; settings: Settings; inspection: Inspection; conversion: Conversion; tasks: DownloadTask[]; notice: string | null;

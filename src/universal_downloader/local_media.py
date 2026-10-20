@@ -18,6 +18,7 @@ from PIL import Image, UnidentifiedImageError
 from . import local_conversion
 from .dependencies import find_ffmpeg, hidden_process_options
 from .errors import DownloadError
+from .ffmpeg_progress import run as run_with_progress
 from .local_animation import ANIMATION_FORMATS, convert_animation, inspect_animation
 
 # Only self-contained formats: never resolve playlists, concat scripts, DASH
@@ -49,6 +50,68 @@ _NOTES = {
     "mov": "H.264 video (CRF 20) with AAC audio in QuickTime. Dimensions pad to even pixels.",
     "webm": "VP9 video (CRF 30) with Opus audio. Dimensions pad to even pixels.",
 }
+
+
+def _copy_audio(stream, target):
+    """Keep only the codec/channel profiles already accepted by our outputs."""
+    if not stream:
+        return False
+    codec = stream.get("codec_name")
+    channels = int(stream.get("channels") or 0)
+    if target in ("m4a", "aac"):
+        return codec == "aac" and stream.get("profile") == "LC" and 0 < channels <= 2
+    if target == "mp3":
+        return codec == "mp3" and 0 < channels <= 2
+    if target == "opus":
+        return codec == "opus" and 0 < channels <= 2
+    if target == "ogg":
+        return codec == "vorbis" and 0 < channels <= 2
+    if target == "flac":
+        return codec == "flac" and 0 < channels <= 8
+    return codec == {"wav": "pcm_s24le", "aiff": "pcm_s24be"}.get(target) and channels > 0
+
+
+def _copy_video(stream, target):
+    if not stream or stream.get("pix_fmt") != "yuv420p":
+        return False
+    width, height = int(stream.get("width") or 0), int(stream.get("height") or 0)
+    if width <= 0 or height <= 0 or width % 2 or height % 2:
+        return False
+    if target == "webm":
+        return stream.get("codec_name") == "vp9" and stream.get("profile") in ("Profile 0", 0)
+    return (target in ("mp4", "mkv", "mov") and stream.get("codec_name") == "h264"
+            and stream.get("profile") in ("Constrained Baseline", "Baseline", "Main", "High"))
+
+
+def _stream_plan(video, audio, target):
+    audio_target = "opus" if target == "webm" else "m4a" if target in _VIDEO else target
+    video_copy = bool(video and target in _VIDEO and _copy_video(video[0], target))
+    audio_copy = bool(audio and _copy_audio(audio[0], audio_target))
+    copies_all = audio_copy if target in _AUDIO else video_copy and (not audio or audio_copy)
+    return {"video_copy": video_copy, "audio_copy": audio_copy,
+            "operation": "copying" if copies_all else "encoding"}
+
+
+def _conversion_note(target, plan, *, has_audio):
+    if target in _AUDIO:
+        if plan["audio_copy"]:
+            codec = {"m4a": "AAC", "aac": "AAC", "ogg": "Vorbis", "wav": "24-bit PCM", "aiff": "24-bit PCM"}.get(target, target.upper())
+            return f"Copies the existing {codec} audio without re-encoding."
+        return _NOTES[target]
+    codec = "VP9" if target == "webm" else "H.264"
+    container = {"mp4": "MP4", "mkv": "Matroska", "mov": "QuickTime", "webm": "WebM"}[target]
+    if plan["video_copy"]:
+        note = f"Copies the existing {codec} video into {container} without re-encoding."
+    else:
+        quality = 30 if target == "webm" else 20
+        note = f"{codec} video (CRF {quality}) in {container}. Dimensions pad to even pixels."
+    if has_audio:
+        audio = "Opus" if target == "webm" else "AAC"
+        if plan["audio_copy"]:
+            note += f" Copies the {audio} audio without re-encoding."
+        else:
+            note += f" Encodes audio as {audio} at {128 if target == 'webm' else 192} kb/s."
+    return note
 
 
 def _tools(location=None):
@@ -179,27 +242,32 @@ def _media_details(metadata, source, ffmpeg):
     native = _native(metadata, source, bool(video))
     encoders, muxers = _capabilities(ffmpeg)
     channels = int(audio[0].get("channels", 0)) if audio else 0
+    plans = {target: _stream_plan(video, audio, target) for target in (*_AUDIO, *_VIDEO)}
     targets = [target for target, (encoder, muxer, _options) in _AUDIO.items()
-               if audio and encoder in encoders and muxer in muxers and (video or target != native)
+               if audio and (plans[target]["audio_copy"] or encoder in encoders) and muxer in muxers and (video or target != native)
                and (target != "flac" or channels <= 8)]
     if video:
         for target, (encoder, audio_encoder, muxer) in _VIDEO.items():
-            compatible_native_mp4 = native == "mp4" and video[0].get("codec_name") == "h264" and (not audio or audio[0].get("codec_name") == "aac")
-            if encoder in encoders and muxer in muxers and (not audio or audio_encoder in encoders) and (target != native or target == "mp4" and not compatible_native_mp4):
+            plan = plans[target]
+            compatible_native_mp4 = native == "mp4" and plan["video_copy"] and (not audio or plan["audio_copy"])
+            if ((plan["video_copy"] or encoder in encoders) and muxer in muxers
+                    and (not audio or plan["audio_copy"] or audio_encoder in encoders)
+                    and (target != native or target == "mp4" and not compatible_native_mp4)):
                 targets.append(target)
     notes = {}
     extra = len(video) > 1 or len(audio) > 1 or any(stream.get("codec_type") in ("subtitle", "data", "attachment") for stream in metadata.get("streams", []))
     for target in targets:
-        note = _NOTES[target]
+        plan = plans[target]
+        note = _conversion_note(target, plan, has_audio=bool(audio))
         if target in _AUDIO and video:
             note += " Extracts the first audio track; video is omitted."
         elif target in _AUDIO and len(audio) > 1:
-            note += " Converts the first audio track only."
+            note += " Keeps the first audio track only."
         elif target in _VIDEO and extra:
             note += " Keeps the first video and first audio track; other tracks and subtitles are omitted."
-        if channels > 2 and target not in ("wav", "flac", "aiff"):
+        if channels > 2 and not plan["audio_copy"] and target not in ("wav", "flac", "aiff"):
             note += " Downmixes multichannel audio to stereo."
-        if video and target in _VIDEO:
+        if video and target in _VIDEO and not plan["video_copy"]:
             pixel_format = video[0].get("pix_fmt", "")
             if pixel_format.startswith(("yuva", "gbrap", "rgba", "bgra", "argb", "abgr")):
                 note += " This video output does not preserve transparency."
@@ -213,7 +281,7 @@ def _media_details(metadata, source, ffmpeg):
             "height": video[0].get("height") if video else None, "has_audio": bool(audio), "duration": duration,
             "targets": targets, "target_notes": notes, "requires_tools": True,
             "_video_index": video[0]["index"] if video else None, "_audio_index": audio[0]["index"] if audio else None,
-            "_audio_channels": channels}
+            "_audio_channels": channels, "_plans": {target: plans[target] for target in targets}}
 
 
 def _image_header(source):
@@ -269,10 +337,12 @@ def inspect_local_files(paths, *, ffmpeg_location=None):
     return results
 
 
-def _run_ffmpeg(ffmpeg, arguments, output):
+def _run_ffmpeg(ffmpeg, arguments, output, *, duration=None, progress_hook=None, operation="encoding"):
     try:
-        subprocess.run([str(ffmpeg), "-hide_banner", "-loglevel", "error", "-nostdin", "-n", *arguments, str(output)],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=1_800, check=True, **hidden_process_options())
+        run_with_progress([str(ffmpeg), "-hide_banner", "-loglevel", "error", "-nostdin", "-nostats",
+                           "-progress", "pipe:1", "-stats_period", "0.25", "-n", *arguments, str(output)],
+                          duration=duration, operation=operation, progress_hook=progress_hook,
+                          process_options=hidden_process_options())
         if not output.is_file() or output.stat().st_size == 0:
             raise DownloadError("The conversion did not produce a complete file. Try another output format.")
         with output.open("r+b") as stream:
@@ -283,12 +353,15 @@ def _run_ffmpeg(ffmpeg, arguments, output):
         raise DownloadError("The media could not be converted to this format. Its codec or channel layout may be unsupported.") from error
 
 
-def _video_arguments(target, *, audio=True):
+def _video_arguments(target, *, audio=True, video_copy=False, audio_copy=False):
     video_encoder, audio_encoder, muxer = _VIDEO[target]
-    options = ["-c:v", video_encoder, "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-pix_fmt", "yuv420p", "-threads", "2"]
-    options += ["-crf", "30", "-b:v", "0", "-deadline", "good", "-cpu-used", "3"] if target == "webm" else ["-crf", "20", "-preset", "medium"]
+    if video_copy:
+        options = ["-c:v", "copy"]
+    else:
+        options = ["-c:v", video_encoder, "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-pix_fmt", "yuv420p", "-threads", "2"]
+        options += ["-crf", "30", "-b:v", "0", "-deadline", "good", "-cpu-used", "3"] if target == "webm" else ["-crf", "20", "-preset", "medium"]
     if audio:
-        options += ["-c:a", audio_encoder, "-b:a", "128k" if target == "webm" else "192k"]
+        options += ["-c:a", "copy"] if audio_copy else ["-c:a", audio_encoder, "-b:a", "128k" if target == "webm" else "192k"]
     else:
         options += ["-an"]
     if target in ("mp4", "mov"):
@@ -316,7 +389,8 @@ def convert_local_file(media, target, output_dir, background="#FFFFFF", progress
             def encode_mp4(prepared, output):
                 _run_ffmpeg(ffmpeg, ["-protocol_whitelist", "file,pipe", "-f", "apng", "-ignore_loop", "1", "-i", str(prepared),
                                      "-map", "0:v:0", "-map_metadata", "-1", "-fps_mode", "vfr",
-                                     *_video_arguments("mp4", audio=False)], output)
+                                     *_video_arguments("mp4", audio=False)], output,
+                            duration=media.get("duration"), progress_hook=progress_hook)
 
         return convert_animation(media, target, output_dir, background, progress_hook, work_dir=work_dir, encode_mp4=encode_mp4)
     if kind not in ("audio", "video"):
@@ -327,6 +401,8 @@ def convert_local_file(media, target, output_dir, background="#FFFFFF", progress
     try:
         destination.mkdir(parents=True, exist_ok=True)
         with local_conversion._work_directory(destination, work_dir) as temporary:
+            if progress_hook:
+                progress_hook({"status": "converting", "operation": "preparing", "progress": None, "speed": None, "eta": None})
             snapshot = temporary / "source.media"
             with snapshot.open("xb") as copied:
                 signature = _stream_snapshot(source, copied)
@@ -337,21 +413,24 @@ def convert_local_file(media, target, output_dir, background="#FFFFFF", progress
             checked = _media_details(_probe(snapshot, ffprobe), snapshot, ffmpeg)
             if target not in checked["targets"]:
                 raise DownloadError("Choose a different compatible output format for this file.")
+            plan = checked["_plans"][target]
             output = temporary / f"output.{target}"
             arguments = ["-protocol_whitelist", "file,pipe", "-format_whitelist", _INPUT_FORMATS, "-i", str(snapshot), "-map_metadata", "-1", "-map_chapters", "-1"]
             if target in _AUDIO:
                 encoder, muxer, options = _AUDIO[target]
-                arguments += ["-map", f"0:{checked['_audio_index']}", "-vn", "-sn", "-dn", "-c:a", encoder, *options, "-f", muxer]
+                arguments += ["-map", f"0:{checked['_audio_index']}", "-vn", "-sn", "-dn"]
+                arguments += ["-c:a", "copy"] if plan["audio_copy"] else ["-c:a", encoder, *options]
+                arguments += ["-f", muxer]
             else:
                 arguments += ["-map", f"0:{checked['_video_index']}"]
                 if checked["has_audio"]:
                     arguments += ["-map", f"0:{checked['_audio_index']}"]
-                arguments += ["-sn", "-dn", *_video_arguments(target, audio=checked["has_audio"])]
-            if checked["_audio_channels"] > 2 and target not in ("wav", "flac", "aiff"):
+                arguments += ["-sn", "-dn", *_video_arguments(target, audio=checked["has_audio"],
+                                                            video_copy=plan["video_copy"], audio_copy=plan["audio_copy"])]
+            if checked["_audio_channels"] > 2 and not plan["audio_copy"] and target not in ("wav", "flac", "aiff"):
                 arguments += ["-ac", "2"]
-            if progress_hook:
-                progress_hook({"status": "converting"})
-            _run_ffmpeg(ffmpeg, arguments, output)
+            _run_ffmpeg(ffmpeg, arguments, output, duration=checked["duration"],
+                        progress_hook=progress_hook, operation=plan["operation"])
             return local_conversion._publish_unique(output, source, target, destination)
     except PermissionError as error:
         raise DownloadError("The converted file could not be saved. Check the destination folder's permissions.") from error

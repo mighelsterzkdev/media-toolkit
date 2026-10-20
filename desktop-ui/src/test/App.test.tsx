@@ -274,6 +274,18 @@ describe('local image conversion', () => {
     expect(screen.getByText('Still running')).toBeInTheDocument()
   })
 
+  it('preserves an explicit conversion choice across polling and tab changes', async () => {
+    const video: LocalImage = { ...png, id: 'video-1', name: 'Clip.mov', format: 'mov', media_type: 'video', has_audio: true, transparent: false, targets: ['mp3', 'mp4', 'mkv'] }
+    const { user } = await conversionApp([video])
+    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('MP4')
+    await chooseConversionFormat(user, 'MP3')
+    await act(() => new Promise(resolve => setTimeout(resolve, 450)))
+    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('MP3')
+    await user.click(screen.getByRole('tab', { name: 'Download' }))
+    await user.click(screen.getByRole('tab', { name: 'Convert' }))
+    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('MP3')
+  })
+
   it('uses a native file picker and only queues files after explicit Convert', async () => {
     const { api, update } = fixture()
     api.select_conversion_files = vi.fn(async () => {
@@ -289,7 +301,7 @@ describe('local image conversion', () => {
     expect(await screen.findByText(png.name)).toBeInTheDocument()
     expect(api.select_conversion_files).toHaveBeenCalledOnce()
     expect(api.enqueue_conversions).not.toHaveBeenCalled()
-    expect(screen.getByText(/1 of 2 selected files can convert to JPG/)).toBeInTheDocument()
+    expect(screen.getByText(/2 of 2 selected files can convert to WebP/)).toBeInTheDocument()
     await chooseConversionFormat(user, 'WebP')
     await user.click(screen.getByRole('button', { name: 'Convert' }))
     await waitFor(() => expect(api.enqueue_conversions).toHaveBeenCalledWith(['image-1', 'image-2'], 'webp', '#FFFFFF'))
@@ -300,7 +312,8 @@ describe('local image conversion', () => {
     expect(screen.getByText('Animated images are not supported.')).toBeInTheDocument()
     expect(screen.getByRole('checkbox', { name: `Select ${invalidImage.name}` })).toBeDisabled()
     expect(screen.getByRole('checkbox', { name: `Select ${invalidImage.name}` })).not.toBeChecked()
-    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('JPG')
+    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('WebP')
+    await chooseConversionFormat(user, 'JPG')
     expect(screen.getByText(/JPG cannot keep transparency/)).toBeInTheDocument()
     await user.click(screen.getByRole('radio', { name: 'Black' }))
     await user.click(screen.getByRole('button', { name: 'Convert' }))
@@ -311,10 +324,12 @@ describe('local image conversion', () => {
 
   it('recomputes compatible counts from the selected subset and keeps selection across polling', async () => {
     const { api, user } = await conversionApp([png, jpeg])
+    await chooseConversionFormat(user, 'JPG')
     expect(screen.getByText(/1 of 2 selected files can convert to JPG/)).toBeInTheDocument()
     expect(screen.getByText('Already JPG · skipped')).toBeInTheDocument()
     await user.click(screen.getByRole('checkbox', { name: `Select ${jpeg.name}` }))
-    expect(screen.getByText(/1 of 1 selected file can convert to JPG/)).toBeInTheDocument()
+    expect(screen.getByText(/1 of 1 selected file can convert to WebP/)).toBeInTheDocument()
+    await chooseConversionFormat(user, 'JPG')
     await act(() => new Promise(resolve => setTimeout(resolve, 450)))
     expect(screen.getByRole('checkbox', { name: `Select ${jpeg.name}` })).not.toBeChecked()
     await user.click(screen.getByRole('button', { name: 'Convert' }))
@@ -323,15 +338,14 @@ describe('local image conversion', () => {
     await user.click(screen.getByRole('button', { name: 'Deselect all' }))
     expect(screen.getByRole('button', { name: 'Convert' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Select all' }))
-    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('JPG')
+    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('WebP')
   })
 
   it('offers the union for a mixed batch and only queues files compatible with the chosen output', async () => {
     const webp: LocalImage = { ...png, id: 'webp', name: 'Picture.webp', format: 'webp', targets: ['png', 'jpg'] }
     const { api, user } = await conversionApp([png, jpeg, webp])
-    expect(screen.getByText(/2 of 3 selected files can convert to JPG/)).toHaveTextContent('The other file is already that format or incompatible and will be skipped.')
+    expect(screen.getByText(/2 of 3 selected files can convert to PNG/)).toHaveTextContent('The other file is already that format or incompatible and will be skipped.')
     expect(screen.getByRole('button', { name: 'Convert' })).toBeEnabled()
-    await chooseConversionFormat(user, 'PNG')
     expect(screen.getByText(/2 of 3 selected files can convert to PNG/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Convert' }))
     await waitFor(() => expect(api.enqueue_conversions).toHaveBeenCalledWith(['image-2', 'webp'], 'png', '#FFFFFF'))
@@ -416,7 +430,7 @@ describe('local image conversion', () => {
     expect(screen.getByText(/Install FFmpeg for audio and video conversion/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Convert' })).toBeEnabled()
     await user.click(screen.getByRole('button', { name: 'Convert' }))
-    await waitFor(() => expect(api.enqueue_conversions).toHaveBeenCalledWith(['image-1'], 'jpg', '#FFFFFF'))
+    await waitFor(() => expect(api.enqueue_conversions).toHaveBeenCalledWith(['image-1'], 'webp', '#FFFFFF'))
     await chooseConversionFormat(user, 'MP3')
     expect(screen.getByRole('button', { name: 'Convert' })).toBeDisabled()
     expect(screen.getByText('Install FFmpeg to convert this selection.')).toBeInTheDocument()

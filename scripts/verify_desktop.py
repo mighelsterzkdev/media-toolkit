@@ -207,7 +207,7 @@ def verify(executable: Path | None = None):
                 selected_video = state["conversion"]["files"][0]
                 assert selected_video["error"] is None and {"mp3", "webm"}.issubset(selected_video["targets"]), selected_video
                 api._tools["status"] = "ready"
-                for target in ("mp3", "webm"):
+                for target in ("mp3", "webm", "mkv"):
                     require(api.enqueue_conversions([selected_video["id"]], target))
                     state = wait_for(service, lambda value: value["tasks"][-1]["status"] in ("completed", "failed"))
                     task = state["tasks"][-1]
@@ -216,7 +216,18 @@ def verify(executable: Path | None = None):
                                             capture_output=True, text=True, timeout=20, check=True, **hidden_process_options())
                     streams = json.loads(result.stdout)["streams"]
                     codecs = {stream["codec_type"]: stream["codec_name"] for stream in streams}
-                    assert codecs == ({"audio": "mp3"} if target == "mp3" else {"video": "vp9", "audio": "opus"}), codecs
+                    expected = {"audio": "mp3"} if target == "mp3" else {"video": "h264", "audio": "aac"} if target == "mkv" else {"video": "vp9", "audio": "opus"}
+                    assert codecs == expected, codecs
+                    if target == "mkv":
+                        def packets(path):
+                            result = subprocess.run([str(ffprobe), "-v", "error", "-show_packets", "-show_data_hash", "sha256",
+                                                     "-show_entries", "packet=stream_index,data_hash", "-of", "json", str(path)],
+                                                    capture_output=True, text=True, timeout=20, check=True, **hidden_process_options())
+                            hashes = {}
+                            for packet in json.loads(result.stdout)["packets"]:
+                                hashes.setdefault(packet["stream_index"], []).append(packet["data_hash"])
+                            return hashes
+                        assert packets(video) == packets(task["path"]), "Compatible streams were unexpectedly re-encoded"
             # The recorded-file shortcut replaces the previous selection and
             # uses its native format to offer the next compatible conversion.
             require(api.prepare_conversion(state["tasks"][0]["id"]))
@@ -229,6 +240,27 @@ def verify(executable: Path | None = None):
             assert state["tasks"][-1]["status"] == "completed", state
             with Image.open(state["tasks"][-1]["path"]) as image:
                 assert image.format == "PNG"
+            # Close with a newly queued conversion. Recovery keeps both history
+            # and pending work, and requires Retry before starting another worker.
+            require(api.enqueue_conversions([selected["id"]], "webp"))
+            pending_id = service.get_state()["tasks"][-1]["id"]
+            previous_ids = [task["id"] for task in service.get_state()["tasks"]]
+            service.shutdown()
+            service = DesktopService(output)
+            api = DesktopApi(service)
+            state = service.get_state()
+            assert [task["id"] for task in state["tasks"]] == previous_ids, state
+            pending = next(task for task in state["tasks"] if task["id"] == pending_id)
+            assert pending["status"] == "cancelled" and "Retry" in pending["error"], pending
+            before_retry = set(output.iterdir())
+            time.sleep(.2)
+            assert set(output.iterdir()) == before_retry
+            assert service.get_state()["tasks"][-1]["status"] == "cancelled"
+            require(api.retry_task(pending_id))
+            state = wait_for(service, lambda value: value["tasks"][-1]["status"] in ("completed", "failed"))
+            assert state["tasks"][-1]["status"] == "completed", state
+            with Image.open(state["tasks"][-1]["path"]) as image:
+                assert image.format == "WEBP"
             assert all(sha256(file.read_bytes()).hexdigest() == digest for file, digest in originals.items())
             deadline = time.monotonic() + 10
             while list(output.glob(".unidown-convert-*")) and time.monotonic() < deadline:
@@ -239,7 +271,7 @@ def verify(executable: Path | None = None):
             require(api.remove_finished())
             assert all(path.is_file() for path in completed)
             av_result = "two-frame animation MP4 timing, MP4 audio extraction and WebM conversion, " if video is not None else ""
-            print("Desktop workers passed: content inspection, AVIF/BMP/TIFF/ICO/GIF/JP2/TGA roundtrips, HEIC decoding, animation preservation, " + av_result + "atomic batch validation, JPEG background, lossless WebP, cancel/retry, completed-file shortcut, source preservation and private workspace cleanup.", flush=True)
+            print("Desktop workers passed: content inspection, AVIF/BMP/TIFF/ICO/GIF/JP2/TGA roundtrips, HEIC decoding, animation preservation, " + av_result + "packet-preserving remux, saved queue recovery with explicit Retry, atomic batch validation, JPEG background, lossless WebP, cancel/retry, completed-file shortcut, source preservation and private workspace cleanup.", flush=True)
         finally:
             service.shutdown()
             if previous_state is None:

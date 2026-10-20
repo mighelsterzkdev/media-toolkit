@@ -23,9 +23,37 @@ const outputGroups = [
 const knownFormats = new Set(outputGroups.flatMap(group => group.formats))
 const ffmpegFormats = new Set(['mp3', 'wav', 'flac', 'm4a', 'aac', 'opus', 'ogg', 'aiff', 'mp4', 'mkv', 'mov', 'webm'])
 const flattenFormats = new Set(['jpg', 'bmp', 'gif', 'mp4'])
+const preferredFormats = {
+  image: ['png', 'webp', 'tiff', 'jp2', 'bmp', 'tga', 'avif', 'jpg', 'gif', 'ico'],
+  audio: ['mp3', 'm4a', 'opus', 'aac', 'ogg', 'flac', 'wav', 'aiff'],
+  video: ['mp4', 'mkv', 'mov', 'webm'],
+  animation: ['apng', 'webp', 'gif'],
+} as const
 const formatNames: Record<string, string> = { webp: 'WebP', webm: 'WebM' }
 function formatName(value: string) { return formatNames[value] ?? value.toUpperCase() }
 function mediaType(file: LocalFile) { return file.media_type ?? (file.animated ? 'animation' : 'image') }
+function preservesMedia(file: LocalFile, target: string) { return (preferredFormats[mediaType(file)] as readonly string[]).includes(target) }
+function targetNeedsTools(file: LocalFile, target: string) { return Boolean(file.requires_tools || ['audio', 'video'].includes(mediaType(file)) || ffmpegFormats.has(target)) }
+function defaultTarget(files: LocalFile[], targets: string[], ffmpegReady: boolean) {
+  // A video stays a video by default, even when extracting audio would cover more files.
+  const singleCategory = new Set(files.map(mediaType)).size === 1
+  const sameCategory = targets.filter(target => files.some(file => file.targets.includes(target) && preservesMedia(file, target)))
+  const categoryCandidates = singleCategory && sameCategory.length > 0 ? sameCategory : targets
+  const readyCandidates = ffmpegReady ? categoryCandidates : categoryCandidates.filter(target => files.filter(file => file.targets.includes(target)).every(file => !targetNeedsTools(file, target)))
+  const candidates = readyCandidates.length > 0 ? readyCandidates : categoryCandidates
+  return candidates.reduce<string | undefined>((best, candidate) => {
+    const score = (target: string) => {
+      const compatible = files.filter(file => file.targets.includes(target))
+      const preserving = compatible.filter(file => preservesMedia(file, target))
+      const quality = preserving.reduce((total, file) => total + 50 - (preferredFormats[mediaType(file)] as readonly string[]).indexOf(target), 0)
+      return [compatible.length, preserving.length, quality]
+    }
+    if (!best) return candidate
+    const current = score(candidate), previous = score(best)
+    const different = current.findIndex((value, index) => value !== previous[index])
+    return different >= 0 && current[different] > previous[different] ? candidate : best
+  }, undefined)
+}
 function mediaIcon(file: LocalFile) { const type = mediaType(file); return type === 'audio' ? Music2 : type === 'video' ? FileVideo : type === 'animation' ? Images : FileImage }
 function playbackTime(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value) || value < 0) return ''
@@ -44,22 +72,23 @@ function fileDescription(file: LocalFile) {
 export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true, onAdd, onRemove, onClear, onBrowse, onConvert }: Props) {
   // New valid files start selected; user exclusions survive polling and tab changes.
   const [excluded, setExcluded] = useState<Set<string>>(() => new Set())
-  const [preferredTarget, setPreferredTarget] = useState<ConversionFormat>('jpg')
+  const [preference, setPreference] = useState<{ target: ConversionFormat; selection: string } | null>(null)
   const [background, setBackground] = useState<'#FFFFFF' | '#000000'>('#FFFFFF')
   const [submitting, setSubmitting] = useState(false)
   const checking = conversion.status === 'checking'
   const busy = disabled || checking || submitting
   const validFiles = conversion.files.filter(file => !file.error && file.targets.length > 0)
   const selected = validFiles.filter(file => !excluded.has(file.id))
+  const selectionKey = JSON.stringify(selected.map(file => [file.id, mediaType(file), file.format]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))
   const availableTargets = new Set(selected.flatMap(file => file.targets))
   const groups = [...outputGroups, { label: 'Other', formats: [...availableTargets].filter(format => !knownFormats.has(format)) }]
     .map(group => ({ ...group, formats: group.formats.filter(format => availableTargets.has(format)) }))
     .filter(group => group.formats.length > 0)
   const targets = groups.flatMap(group => group.formats)
-  const target = targets.includes(preferredTarget) ? preferredTarget : targets[0]
+  const target = preference?.selection === selectionKey && targets.includes(preference.target) ? preference.target : defaultTarget(selected, targets, ffmpegReady)
   const compatible = target ? selected.filter(file => file.targets.includes(target)) : []
   const skipped = selected.length - compatible.length
-  const needsTools = Boolean(target && !ffmpegReady && compatible.some(file => file.requires_tools || ['audio', 'video'].includes(mediaType(file)) || ffmpegFormats.has(target)))
+  const needsTools = Boolean(target && !ffmpegReady && compatible.some(file => targetNeedsTools(file, target)))
   const flattensAlpha = Boolean(target && flattenFormats.has(target) && compatible.some(file => file.transparent))
   const targetNotes = target ? [...new Set(compatible.map(file => file.target_notes?.[target]).filter((note): note is string => Boolean(note)))] : []
 
@@ -114,7 +143,7 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
     {conversion.error ? <div className="inspection-error" role="alert"><CircleAlert className="size-4 shrink-0" /><span>{conversion.error}</span></div> : null}
     {selected.length > 0 && !checking && target ? <div className="conversion-options">
       <div className="conversion-target-field"><Label htmlFor="conversion-format">Convert to</Label>
-        <Select value={target} onValueChange={setPreferredTarget} disabled={busy}>
+        <Select value={target} onValueChange={value => setPreference({ target: value, selection: selectionKey })} disabled={busy}>
           <SelectTrigger id="conversion-format" aria-describedby="conversion-compatibility"><SelectValue /></SelectTrigger>
           <SelectContent>{groups.map(group => <SelectGroup key={group.label}><SelectLabel>{group.label}</SelectLabel>{group.formats.map(format => <SelectItem key={format} value={format} textValue={formatName(format)}>{formatName(format)}<span className="conversion-format-count"> · {selected.filter(file => file.targets.includes(format)).length} / {selected.length} {selected.length === 1 ? 'file' : 'files'}</span></SelectItem>)}</SelectGroup>)}</SelectContent>
         </Select>

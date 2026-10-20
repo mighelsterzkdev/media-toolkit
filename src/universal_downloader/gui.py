@@ -415,7 +415,7 @@ def main() -> int:
     service = None
     server = None
     try:
-        service = DesktopService(default_output=PROJECT_ROOT / "downloads")
+        service = DesktopService(default_output=PROJECT_ROOT / "downloads", queue_scope="desktop")
         api = DesktopApi(service)
         server = AssetServer()
         webview.settings["ALLOW_DOWNLOADS"] = False
@@ -435,7 +435,7 @@ def main() -> int:
                 preparing = api._tools["status"] == "installing"
             active = preparing or service.active_jobs()
             if active and not window.create_confirmation_dialog(
-                f"Close {APP_NAME}?", "There is work in progress. Close the app and stop the current work? Supported interrupted downloads can be resumed later.",
+                f"Close {APP_NAME}?", "There is work in progress. Close the app and stop the current work? Your queue will be kept. Use Retry after reopening to continue.",
             ):
                 return False
             api._closed = True

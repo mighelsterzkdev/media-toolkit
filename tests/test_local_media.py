@@ -14,7 +14,7 @@ from PIL import Image
 
 from universal_downloader.dependencies import find_ffmpeg, hidden_process_options
 from universal_downloader.errors import DownloadError
-from universal_downloader.local_media import convert_local_file, inspect_local_files
+from universal_downloader.local_media import _run_ffmpeg, convert_local_file, inspect_local_files
 
 
 class LocalMediaTests(unittest.TestCase):
@@ -61,16 +61,24 @@ class LocalMediaTests(unittest.TestCase):
         return json.loads(subprocess.run([str(executable), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(source)],
                                          capture_output=True, text=True, check=True, timeout=15, **hidden_process_options()).stdout)
 
-    def video(self, *, audio=True, native="mkv", codec="ffv1", extra_audio=False):
+    def video(self, *, audio=True, native="mkv", codec="ffv1", audio_codec="aac", extra_audio=False):
         source = self.root / f"video.{native}"
         options = ["-f", "lavfi", "-i", "color=c=red:size=34x26:rate=10:duration=0.4"]
         if audio:
             options += ["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=0.4", "-map", "0:v:0", "-map", "1:a:0"]
             if extra_audio:
                 options += ["-map", "1:a:0"]
-        options += ["-c:v", codec, "-c:a", "aac", "-threads", "1", source]
+        options += ["-c:v", codec, "-c:a", audio_codec, "-threads", "1", source]
         self.run_tool(options)
         return source
+
+    def packets(self, source, selector):
+        _encoder, executable = self.tools()
+        result = subprocess.run([str(executable), "-v", "error", "-select_streams", selector,
+                                 "-show_packets", "-show_entries", "packet=data_hash", "-show_data_hash", "sha256",
+                                 "-of", "json", str(source)], capture_output=True, text=True, check=True,
+                                timeout=15, **hidden_process_options())
+        return [packet["data_hash"] for packet in json.loads(result.stdout)["packets"]]
 
     def assert_clean(self):
         self.assertEqual(list(self.output.glob(".unidown-convert-*")), [])
@@ -345,6 +353,124 @@ class LocalMediaTests(unittest.TestCase):
         with self.assertRaisesRegex(DownloadError, "Cancelled"):
             convert_local_file(checked, "flac", self.output, progress_hook=cancel)
         self.assertEqual(list(self.output.iterdir()), [])
+
+    def test_compatible_h264_aac_container_changes_keep_encoded_packets(self):
+        source = self.video(codec="libx264")
+        checked = self.checked(source)
+        original = source.read_bytes()
+        self.assertIn("without re-encoding", checked["target_notes"]["mp4"])
+        for target in ("mp4", "mov"):
+            with self.subTest(target=target):
+                events = []
+                output = convert_local_file(checked, target, self.output, progress_hook=events.append)
+                self.assertEqual(self.packets(source, "v:0"), self.packets(output, "v:0"))
+                self.assertEqual(self.packets(source, "a:0"), self.packets(output, "a:0"))
+                self.assertEqual([stream["codec_name"] for stream in self.probe(output)["streams"]], ["h264", "aac"])
+                self.assertTrue(any(event.get("operation") == "copying" for event in events))
+                self.assertEqual(events[0]["operation"], "preparing")
+                self.assertEqual(events[-1]["progress"], 99.9)
+        self.assertEqual(source.read_bytes(), original)
+        self.assert_clean()
+
+    def test_video_is_kept_while_only_incompatible_audio_is_encoded(self):
+        source = self.video(codec="libx264", audio_codec="flac")
+        checked = self.checked(source)
+        note = checked["target_notes"]["mp4"]
+        self.assertIn("Copies the existing H.264 video", note)
+        self.assertIn("Encodes audio as AAC", note)
+        events = []
+        output = convert_local_file(checked, "mp4", self.output, progress_hook=events.append)
+        self.assertEqual(self.packets(source, "v:0"), self.packets(output, "v:0"))
+        self.assertEqual([stream["codec_name"] for stream in self.probe(output)["streams"]], ["h264", "aac"])
+        self.assertTrue(any(event.get("operation") == "encoding" for event in events))
+        self.assertNotIn("copying", [event.get("operation") for event in events])
+
+    def test_vp9_opus_can_change_from_matroska_to_webm_without_reencoding(self):
+        source = self.video(codec="libvpx-vp9", audio_codec="libopus")
+        checked = self.checked(source)
+        self.assertIn("without re-encoding", checked["target_notes"]["webm"])
+        output = convert_local_file(checked, "webm", self.output)
+        self.assertEqual(self.packets(source, "v:0"), self.packets(output, "v:0"))
+        self.assertEqual(self.packets(source, "a:0"), self.packets(output, "a:0"))
+
+    def test_audio_extraction_keeps_compatible_mp3_and_flac_packets(self):
+        for codec, target in (("libmp3lame", "mp3"), ("flac", "flac")):
+            with self.subTest(codec=codec):
+                source = self.video(codec="libx264", audio_codec=codec)
+                checked = self.checked(source)
+                self.assertIn("without re-encoding", checked["target_notes"][target])
+                self.assertIn("Extracts the first audio track", checked["target_notes"][target])
+                output = convert_local_file(checked, target, self.output)
+                self.assertEqual(self.packets(source, "a:0"), self.packets(output, "a:0"))
+                self.assertEqual(len(self.probe(output)["streams"]), 1)
+                source.unlink()
+
+    def test_aac_between_adts_and_m4a_keeps_compressed_audio(self):
+        source = self.audio()
+        checked = self.checked(source)
+        m4a = convert_local_file(checked, "m4a", self.output)
+        original_hashes = self.packets(m4a, "a:0")
+        checked = self.checked(m4a)
+        self.assertIn("Copies the existing AAC audio", checked["target_notes"]["aac"])
+        aac = convert_local_file(checked, "aac", self.output)
+        remuxed = convert_local_file(self.checked(aac), "m4a", self.output)
+        self.assertEqual(original_hashes, self.packets(remuxed, "a:0"))
+
+    def test_h264_other_pixel_profiles_still_normalize_to_compatible_mp4(self):
+        source = self.root / "high444.mp4"
+        self.run_tool(["-f", "lavfi", "-i", "testsrc=size=34x26:rate=10:duration=0.4", "-c:v", "libx264",
+                       "-pix_fmt", "yuv444p", "-threads", "1", "-an", source])
+        checked = self.checked(source)
+        self.assertIn("mp4", checked["targets"])
+        self.assertNotIn("without re-encoding", checked["target_notes"]["mp4"])
+        output = convert_local_file(checked, "mp4", self.output)
+        self.assertEqual(self.probe(output)["streams"][0]["pix_fmt"], "yuv420p")
+        self.assertNotIn("mp4", self.checked(output)["targets"])
+
+    def test_real_ffmpeg_timestamps_report_intermediate_monotonic_progress(self):
+        ffmpeg, _ffprobe = self.tools()
+        self.output.mkdir()
+        output = self.output / "timed.flac"
+        events = []
+        _run_ffmpeg(ffmpeg, ["-re", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1.2",
+                            "-c:a", "flac", "-f", "flac"], output, duration=1.2, progress_hook=events.append)
+        percentages = [event["progress"] for event in events if event["progress"] is not None]
+        self.assertEqual(percentages, sorted(percentages))
+        self.assertTrue(any(0 < value < 99.9 for value in percentages), events)
+        self.assertEqual(percentages[-1], 99.9)
+        self.assertTrue(any(event["eta"] is not None and event["eta"] > 0 for event in events), events)
+        self.assertGreater(output.stat().st_size, 0)
+
+    def test_callback_failure_after_encoder_starts_leaves_no_published_file(self):
+        checked = self.checked(self.audio())
+
+        def cancel(event):
+            if event.get("progress") is not None and event["progress"] > 0:
+                raise DownloadError("Cancelled during encoding")
+
+        with self.assertRaisesRegex(DownloadError, "Cancelled during encoding"):
+            convert_local_file(checked, "flac", self.output, progress_hook=cancel)
+        self.assertEqual(list(self.output.iterdir()), [])
+        self.assert_clean()
+
+    def test_encoder_timeout_leaves_source_unchanged_and_removes_private_output(self):
+        source = self.audio()
+        original = source.read_bytes()
+        checked = self.checked(source)
+        with patch("universal_downloader.local_media.run_with_progress", side_effect=subprocess.TimeoutExpired("ffmpeg", 1_800)):
+            with self.assertRaisesRegex(DownloadError, "30 minute limit"):
+                convert_local_file(checked, "flac", self.output)
+        self.assertEqual(source.read_bytes(), original)
+        self.assertEqual(list(self.output.iterdir()), [])
+
+    def test_copy_targets_still_work_when_only_muxers_are_available(self):
+        source = self.video(codec="libx264")
+        with patch("universal_downloader.local_media._capabilities", return_value=(set(), {"mp4"})):
+            checked = self.checked(source)
+            self.assertEqual(checked["targets"], ["mp4"])
+            output = convert_local_file(checked, "mp4", self.output)
+        self.assertEqual(self.packets(source, "v:0"), self.packets(output, "v:0"))
+        self.assertEqual(self.packets(source, "a:0"), self.packets(output, "a:0"))
 
 
 if __name__ == "__main__":
