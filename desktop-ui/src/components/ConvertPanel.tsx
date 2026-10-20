@@ -1,34 +1,67 @@
 import { useState } from 'react'
-import { ArrowRightLeft, CircleAlert, FileImage, LoaderCircle, Plus, X } from 'lucide-react'
+import { ArrowRightLeft, CircleAlert, FileImage, FileVideo, Files, Images, LoaderCircle, Music2, Plus, X } from 'lucide-react'
 import { Button } from './ui/button'
 import { Label } from './ui/label'
 import { RadioGroup, RadioGroupItem } from './ui/radio-group'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from './ui/select'
 import { SaveDestination } from './SaveDestination'
 import { bytes } from '../format'
-import type { Conversion, ImageFormat } from '../types'
+import type { Conversion, ConversionFormat, LocalFile } from '../types'
 
 interface Props {
-  conversion: Conversion; output: string; disabled: boolean;
+  conversion: Conversion; output: string; disabled: boolean; ffmpegReady?: boolean;
   onAdd(): void; onRemove(id: string): void; onClear(): void; onBrowse(): void;
-  onConvert(ids: string[], target: ImageFormat, background: '#FFFFFF' | '#000000'): Promise<unknown>
+  onConvert(ids: string[], target: ConversionFormat, background: '#FFFFFF' | '#000000'): Promise<unknown>
 }
 
-const formats: ImageFormat[] = ['png', 'jpg', 'webp']
-const formatNames: Record<ImageFormat, string> = { png: 'PNG', jpg: 'JPG', webp: 'WebP' }
+const outputGroups = [
+  { label: 'Images', formats: ['png', 'jpg', 'webp', 'avif', 'bmp', 'tiff', 'ico', 'tga', 'gif', 'jp2'] },
+  { label: 'Audio', formats: ['mp3', 'wav', 'flac', 'm4a', 'aac', 'opus', 'ogg', 'aiff'] },
+  { label: 'Video', formats: ['mp4', 'mkv', 'mov', 'webm'] },
+  { label: 'Animation', formats: ['apng'] },
+]
+const knownFormats = new Set(outputGroups.flatMap(group => group.formats))
+const ffmpegFormats = new Set(['mp3', 'wav', 'flac', 'm4a', 'aac', 'opus', 'ogg', 'aiff', 'mp4', 'mkv', 'mov', 'webm'])
+const flattenFormats = new Set(['jpg', 'bmp', 'gif', 'mp4'])
+const formatNames: Record<string, string> = { webp: 'WebP', webm: 'WebM' }
+function formatName(value: string) { return formatNames[value] ?? value.toUpperCase() }
+function mediaType(file: LocalFile) { return file.media_type ?? (file.animated ? 'animation' : 'image') }
+function mediaIcon(file: LocalFile) { const type = mediaType(file); return type === 'audio' ? Music2 : type === 'video' ? FileVideo : type === 'animation' ? Images : FileImage }
+function playbackTime(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value) || value < 0) return ''
+  const seconds = Math.round(value)
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+function fileDescription(file: LocalFile) {
+  const type = mediaType(file)
+  return [type[0].toUpperCase() + type.slice(1), file.format ? formatName(file.format) : '',
+    file.width && file.height ? `${file.width} × ${file.height}` : '', playbackTime(file.duration),
+    file.pages && file.pages > 1 ? `${file.pages} ${type === 'animation' ? 'frames' : 'pages'}` : '', file.size != null ? bytes(file.size) : '',
+    file.transparent ? 'Transparent' : '', type === 'video' && file.has_audio === false ? 'No audio' : '',
+  ].filter(Boolean).join(' · ')
+}
 
-export function ConvertPanel({ conversion, output, disabled, onAdd, onRemove, onClear, onBrowse, onConvert }: Props) {
+export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true, onAdd, onRemove, onClear, onBrowse, onConvert }: Props) {
   // New valid files start selected; user exclusions survive polling and tab changes.
   const [excluded, setExcluded] = useState<Set<string>>(() => new Set())
-  const [preferredTarget, setPreferredTarget] = useState<ImageFormat>('jpg')
+  const [preferredTarget, setPreferredTarget] = useState<ConversionFormat>('jpg')
   const [background, setBackground] = useState<'#FFFFFF' | '#000000'>('#FFFFFF')
   const [submitting, setSubmitting] = useState(false)
   const checking = conversion.status === 'checking'
   const busy = disabled || checking || submitting
   const validFiles = conversion.files.filter(file => !file.error && file.targets.length > 0)
   const selected = validFiles.filter(file => !excluded.has(file.id))
-  const targets = formats.filter(target => selected.length > 0 && selected.every(file => file.targets.includes(target)))
+  const availableTargets = new Set(selected.flatMap(file => file.targets))
+  const groups = [...outputGroups, { label: 'Other', formats: [...availableTargets].filter(format => !knownFormats.has(format)) }]
+    .map(group => ({ ...group, formats: group.formats.filter(format => availableTargets.has(format)) }))
+    .filter(group => group.formats.length > 0)
+  const targets = groups.flatMap(group => group.formats)
   const target = targets.includes(preferredTarget) ? preferredTarget : targets[0]
-  const flattensAlpha = target === 'jpg' && selected.some(file => file.transparent)
+  const compatible = target ? selected.filter(file => file.targets.includes(target)) : []
+  const skipped = selected.length - compatible.length
+  const needsTools = Boolean(target && !ffmpegReady && compatible.some(file => file.requires_tools || ['audio', 'video'].includes(mediaType(file)) || ffmpegFormats.has(target)))
+  const flattensAlpha = Boolean(target && flattenFormats.has(target) && compatible.some(file => file.transparent))
+  const targetNotes = target ? [...new Set(compatible.map(file => file.target_notes?.[target]).filter((note): note is string => Boolean(note)))] : []
 
   function selectFile(id: string, checked: boolean) {
     setExcluded(previous => { const next = new Set(previous); if (checked) next.delete(id); else next.add(id); return next })
@@ -41,56 +74,64 @@ export function ConvertPanel({ conversion, output, disabled, onAdd, onRemove, on
     })
   }
   async function convert() {
-    if (busy || !target || selected.length === 0) return
+    if (busy || needsTools || !target || compatible.length === 0) return
     setSubmitting(true)
-    try { await onConvert(selected.map(file => file.id), target, background) }
+    try { await onConvert(compatible.map(file => file.id), target, background) }
     finally { setSubmitting(false) }
   }
 
   return <section className="convert-card" aria-labelledby="convert-heading">
     <div className="section-heading new-download-heading">
-      <h2 id="convert-heading">Convert images</h2>
+      <h2 id="convert-heading">Convert files</h2>
       <Button variant="outline" onClick={onAdd} disabled={busy}><Plus className="size-4" />Add files</Button>
     </div>
     {conversion.files.length === 0 ? <div className="conversion-empty">
-      <FileImage className="size-6" aria-hidden="true" />
-      <div><p>Choose images from your computer</p><span>PNG, JPG and WebP. Original files are kept.</span></div>
+      <Files className="size-6" aria-hidden="true" />
+      <div><p>Choose files from your computer</p><span>Images, audio, video and animations. Original files are kept.</span></div>
     </div> : <>
       <div className="conversion-selection">
-        <span>{selected.length} of {validFiles.length} valid {validFiles.length === 1 ? 'image' : 'images'} selected</span>
-        <div><Button variant="ghost" size="sm" onClick={toggleAll} disabled={busy || validFiles.length === 0}>{selected.length === validFiles.length ? 'Deselect all' : 'Select all'}</Button><Button variant="ghost" size="sm" onClick={onClear} disabled={busy}>Clear files</Button></div>
+        <span>{selected.length} of {validFiles.length} valid {validFiles.length === 1 ? 'file' : 'files'} selected</span>
+        <div><Button variant="ghost" size="sm" onClick={toggleAll} disabled={busy || validFiles.length === 0}>{selected.length === validFiles.length ? 'Deselect all' : 'Select all'}</Button><Button variant="ghost" size="sm" onClick={onClear} disabled={disabled || submitting}>Clear files</Button></div>
       </div>
-      <ul className="conversion-files" aria-label="Selected image files">
+      <ul className="conversion-files" aria-label="Selected files">
         {conversion.files.map(file => {
           const valid = !file.error && file.targets.length > 0
+          const willSkip = valid && !excluded.has(file.id) && target && !file.targets.includes(target)
+          const FileIcon = mediaIcon(file)
           return <li key={file.id} className={`conversion-file ${file.error ? 'conversion-file-invalid' : ''}`}>
             <input type="checkbox" className="file-checkbox" aria-label={`Select ${file.name}`} checked={valid && !excluded.has(file.id)} disabled={busy || !valid} onChange={event => selectFile(file.id, event.target.checked)} />
-            <FileImage className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <FileIcon className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <div className="conversion-file-copy"><p title={file.name}>{file.name}</p>
-              {file.error ? <span className="inline-error">{file.error}</span> : <span>{file.format?.toUpperCase()}{file.width && file.height ? ` · ${file.width} × ${file.height}` : ''}{file.size != null ? ` · ${bytes(file.size)}` : ''}{file.transparent ? ' · Transparent' : ''}</span>}
+              {file.error ? <span className="inline-error">{file.error}</span> : <span>{fileDescription(file)}</span>}
+              {willSkip ? <span className="conversion-file-skip">{file.format?.toLowerCase() === target ? `Already ${formatName(target)}` : `Incompatible with ${formatName(target)}`} · skipped</span> : null}
             </div>
             <Button variant="ghost" size="icon" aria-label={`Remove ${file.name}`} title="Remove from selection" disabled={busy} onClick={() => onRemove(file.id)}><X className="size-4" /></Button>
           </li>
         })}
       </ul>
     </>}
-    {checking ? <div className="checking-state" role="status"><LoaderCircle className="size-4 animate-spin" />Checking image files…</div> : null}
+    {checking ? <div className="checking-state" role="status"><LoaderCircle className="size-4 animate-spin" />Checking files…</div> : null}
     {conversion.error ? <div className="inspection-error" role="alert"><CircleAlert className="size-4 shrink-0" /><span>{conversion.error}</span></div> : null}
-    {selected.length > 0 && !checking ? targets.length > 0 ? <div className="conversion-options">
-      <Label>Convert to</Label>
-      <RadioGroup value={target} onValueChange={value => setPreferredTarget(value as ImageFormat)} aria-label="Conversion format" orientation="horizontal" className="kind-options flex flex-wrap gap-2">
-        {targets.map(format => <Label key={format} htmlFor={`convert-format-${format}`} className={`kind-option ${format === target ? 'selected' : ''}`}><RadioGroupItem id={`convert-format-${format}`} value={format} className="sr-only" disabled={busy} />{formatNames[format]}</Label>)}
-      </RadioGroup>
-      {flattensAlpha ? <div className="alpha-background"><Label>JPG background</Label>
-        <RadioGroup value={background} onValueChange={value => setBackground(value as '#FFFFFF' | '#000000')} aria-label="JPG background" orientation="horizontal" className="flex flex-wrap gap-6">
+    {selected.length > 0 && !checking && target ? <div className="conversion-options">
+      <div className="conversion-target-field"><Label htmlFor="conversion-format">Convert to</Label>
+        <Select value={target} onValueChange={setPreferredTarget} disabled={busy}>
+          <SelectTrigger id="conversion-format" aria-describedby="conversion-compatibility"><SelectValue /></SelectTrigger>
+          <SelectContent>{groups.map(group => <SelectGroup key={group.label}><SelectLabel>{group.label}</SelectLabel>{group.formats.map(format => <SelectItem key={format} value={format} textValue={formatName(format)}>{formatName(format)}<span className="conversion-format-count"> · {selected.filter(file => file.targets.includes(format)).length} / {selected.length} {selected.length === 1 ? 'file' : 'files'}</span></SelectItem>)}</SelectGroup>)}</SelectContent>
+        </Select>
+      </div>
+      <p id="conversion-compatibility" className="field-help" role="status">{compatible.length} of {selected.length} selected {selected.length === 1 ? 'file' : 'files'} can convert to {formatName(target)}.{skipped > 0 ? ` The other ${skipped === 1 ? 'file is' : `${skipped} files are`} already that format or incompatible and will be skipped.` : ''}</p>
+      {targetNotes.map(note => <p key={note} className="field-help">{note}</p>)}
+      {needsTools ? <p className="field-help">Install FFmpeg to convert this selection.</p> : null}
+      {flattensAlpha ? <div className="alpha-background"><Label>{formatName(target)} background</Label>
+        <RadioGroup value={background} onValueChange={value => setBackground(value as '#FFFFFF' | '#000000')} aria-label={`${formatName(target)} background`} orientation="horizontal" className="flex flex-wrap gap-6">
           <Label htmlFor="background-white" className="background-choice"><RadioGroupItem id="background-white" value="#FFFFFF" disabled={busy} />White</Label>
           <Label htmlFor="background-black" className="background-choice"><RadioGroupItem id="background-black" value="#000000" disabled={busy} />Black</Label>
-        </RadioGroup><p>JPG cannot keep transparency. Transparent areas will use this background.</p>
+        </RadioGroup><p>{formatName(target)} {target === 'gif' ? 'keeps fully transparent pixels. Partially transparent areas will use this background.' : 'cannot keep transparency. Transparent areas will use this background.'}</p>
       </div> : null}
-    </div> : <p className="url-hint">These images have no shared output format. Select fewer images to see compatible formats.</p> : null}
+    </div> : null}
     <div className="download-footer">
       <SaveDestination output={output} disabled={disabled} onBrowse={onBrowse} />
-      <Button className="download-button" onClick={() => void convert()} disabled={busy || !target || selected.length === 0}>{submitting ? <LoaderCircle className="animate-spin" /> : <ArrowRightLeft />}Convert</Button>
+      <Button className="download-button" onClick={() => void convert()} disabled={busy || needsTools || !target || compatible.length === 0}>{submitting ? <LoaderCircle className="animate-spin" /> : <ArrowRightLeft />}Convert</Button>
     </div>
   </section>
 }

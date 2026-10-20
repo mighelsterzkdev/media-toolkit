@@ -25,16 +25,13 @@ def _number(value):
 
 
 def _can_convert(path):
-    from .local_conversion import inspect_local_files
-
-    if Path(path).suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
-        return False
+    from .local_media import inspect_local_files
     try:
         inspected = inspect_local_files([path])
-        return len(inspected) == 1 and not inspected[0].get("error")
+        return len(inspected) == 1 and not inspected[0].get("error") and bool(inspected[0].get("targets"))
     except (DownloadError, OSError, ValueError, TypeError, RuntimeError, MemoryError):
         # A completed download remains successful even if it is not eligible
-        # for the optional static-image conversion shortcut.
+        # for the optional conversion shortcut.
         return False
 
 
@@ -50,15 +47,15 @@ def _worker_main(connection):
             connection.send(("inspection", result))
             return
         if payload["action"] == "inspect_local":
-            from .local_conversion import inspect_local_files
+            from .local_media import inspect_local_files
 
             connection.send(("local_inspection", inspect_local_files(payload["paths"])))
             return
         if payload["action"] == "convert":
-            from .local_conversion import convert_local_image
+            from .local_media import convert_local_file
 
             connection.send(("progress", {"status": "converting"}))
-            path = convert_local_image(payload["image"], payload["format"], Path(payload["settings"]["output"]),
+            path = convert_local_file(payload["image"], payload["format"], Path(payload["settings"]["output"]),
                                        background=payload["background"], work_dir=Path(payload["work_dir"]))
             connection.send(("result", {"title": payload["image"]["name"], "path": str(path), "already_exists": False, "can_convert": True}))
             return

@@ -153,12 +153,12 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertEqual(state["tasks"][0]["action"], "download")
         self.assertTrue(state["tasks"][0]["can_convert"])
 
-    def test_original_animation_does_not_offer_static_conversion_shortcut(self):
+    def test_original_animation_offers_frame_preserving_conversion_shortcut(self):
         inspection = self.inspect("/animation.gif")
         self.enqueue_inspected(inspection)
         state = self.wait(lambda state: state["tasks"][0]["status"] in ("completed", "failed"))
         self.assertEqual(state["tasks"][0]["status"], "completed", state)
-        self.assertFalse(state["tasks"][0]["can_convert"])
+        self.assertTrue(state["tasks"][0]["can_convert"])
 
     def test_local_conversions_share_the_download_queue_and_independent_inspection(self):
         source = self.root / "local.png"

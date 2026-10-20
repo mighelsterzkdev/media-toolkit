@@ -50,7 +50,7 @@ export function TaskList({ tasks, disabled, retryDisabled, onCancel, onRetry, on
               {task.eta != null && task.status === 'downloading' ? <span className="task-eta">{duration(task.eta)}</span> : null}
             </div>
             {task.status === 'downloading' ? <Progress value={progress} aria-label={`Download progress for ${task.title}`} className={progress == null ? 'progress-indeterminate' : ''} /> : null}
-            {task.status === 'converting' ? <p className="task-operation" role="status">Encoding image…</p> : null}
+            {task.status === 'converting' ? <p className="task-operation" role="status">Encoding file…</p> : null}
             {task.error ? <p className="task-error">{task.error}</p> : null}
           </div>
           <div className="task-actions">

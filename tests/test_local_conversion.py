@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 import os
 from pathlib import Path
+import struct
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -37,20 +38,25 @@ class LocalConversionTests(unittest.TestCase):
 
     def test_content_detection_per_file_errors_and_meaningful_targets(self):
         source = self.image("not-a-jpeg.jpg")
-        unsupported = self.image("bitmap.png", format="BMP", mode="RGB", color="red")
+        bitmap = self.image("bitmap.png", format="BMP", mode="RGB", color="red")
         invalid = self.root / "invalid.png"
         invalid.write_text("This is not an image", encoding="utf-8")
-        results = inspect_local_files([source, unsupported, invalid, self.root / "missing.webp", self.root])
+        results = inspect_local_files([source, bitmap, invalid, self.root / "missing.webp", self.root])
         self.assertEqual(len(results), 5)
         valid = results[0]
         self.assertEqual(valid["format"], "png")
-        self.assertEqual(valid["targets"], ["jpg", "webp"])
+        self.assertTrue({"jpg", "webp", "bmp", "gif", "tga"}.issubset(valid["targets"]))
+        self.assertNotIn("png", valid["targets"])
+        self.assertNotIn("ico", valid["targets"])
+        self.assertEqual(valid["media_type"], "image")
         self.assertEqual((valid["width"], valid["height"]), (16, 12))
         self.assertEqual(valid["size"], source.stat().st_size)
         self.assertEqual(valid["signature"]["sha256"], sha256(source.read_bytes()).hexdigest())
         self.assertFalse(valid["transparent"])
         self.assertEqual(valid["source"], str(source))
-        for failed in results[1:]:
+        self.assertIsNone(results[1]["error"])
+        self.assertEqual(results[1]["format"], "bmp")
+        for failed in results[2:]:
             self.assertTrue(failed["error"], failed)
             self.assertEqual(failed["targets"], [])
 
@@ -187,7 +193,7 @@ class LocalConversionTests(unittest.TestCase):
 
     def test_same_format_unsupported_target_and_background_are_rejected(self):
         checked = self.inspected(self.image())
-        for target, background in (("png", "#FFFFFF"), ("gif", "#FFFFFF"), ([], "#FFFFFF"), ("jpg", "transparent"), ("jpg", [])):
+        for target, background in (("png", "#FFFFFF"), ("pdf", "#FFFFFF"), ([], "#FFFFFF"), ("jpg", "transparent"), ("jpg", [])):
             with self.subTest(target=target, background=background), self.assertRaises(DownloadError):
                 convert_local_image(checked, target, self.output, background)
         self.assertFalse(self.output.exists())
@@ -232,6 +238,115 @@ class LocalConversionTests(unittest.TestCase):
         with patch("universal_downloader.dependencies.find_ffmpeg", return_value=None):
             output = convert_local_image(checked, "webp", self.output)
         self.assertTrue(output.is_file())
+
+    def test_every_offered_encoder_creates_an_identifiable_image_at_original_size(self):
+        source = self.image(size=(32, 32), color=(80, 150, 220, 128))
+        checked = self.inspected(source)
+        self.assertIn("ico", checked["targets"])
+        expected_formats = {"jpg": "JPEG", "webp": "WEBP", "avif": "AVIF", "bmp": "BMP",
+                            "tiff": "TIFF", "ico": "ICO", "tga": "TGA", "gif": "GIF", "jp2": "JPEG2000"}
+        original = source.read_bytes()
+        for target in checked["targets"]:
+            with self.subTest(target=target):
+                output = convert_local_image(checked, target, self.output)
+                with Image.open(output) as converted:
+                    converted.load()
+                    self.assertEqual(converted.format, expected_formats[target])
+                    self.assertEqual(converted.size, (32, 32))
+                self.assertIsNone(self.inspected(output)["error"])
+        self.assertEqual(source.read_bytes(), original)
+        self.assert_clean()
+
+    def test_common_static_inputs_are_detected_by_content_and_convert_to_png(self):
+        from PIL import features
+        cases = [("BMP", "bmp"), ("TIFF", "tiff"), ("GIF", "gif"), ("TGA", "tga"),
+                 ("PCX", "pcx"), ("PPM", "pnm"), ("DDS", "dds"), ("QOI", "qoi"), ("SGI", "sgi")]
+        if "avif" in features.get_supported():
+            cases.append(("AVIF", "avif"))
+        if "jpg_2000" in features.get_supported():
+            cases.append(("JPEG2000", "jp2"))
+        for encoder, native in cases:
+            with self.subTest(encoder=encoder):
+                source = self.image(f"{native}.wrong", format=encoder, mode="RGB", color=(40, 80, 160), size=(32, 32))
+                checked = self.inspected(source)
+                self.assertEqual(checked["format"], native)
+                output = convert_local_image(checked, "png", self.output)
+                with Image.open(output) as converted:
+                    self.assertEqual(converted.format, "PNG")
+                    self.assertEqual(converted.size, (32, 32))
+
+    def test_missing_optional_codecs_are_never_offered(self):
+        checked_path = self.image()
+        with patch("universal_downloader.local_conversion.features.get_supported", return_value=["zlib", "jpg"]):
+            checked = self.inspected(checked_path)
+        for unavailable in ("webp", "avif", "tiff", "jp2"):
+            self.assertNotIn(unavailable, checked["targets"])
+        self.assertIn("jpg", checked["targets"])
+        self.assertIn("bmp", checked["targets"])
+
+    def test_flat_photoshop_composite_is_read_from_content_without_renaming(self):
+        source = self.root / "photoshop.image"
+        # A valid uncompressed RGB PSD composite with no editable layers.
+        source.write_bytes(b"8BPS" + struct.pack(">H6sHIIHH", 1, bytes(6), 3, 2, 3, 8, 3)
+                           + bytes(12) + struct.pack(">H", 0) + bytes([30] * 6 + [90] * 6 + [180] * 6))
+        checked = self.inspected(source)
+        self.assertEqual(checked["format"], "psd")
+        converted = convert_local_image(checked, "png", self.output)
+        with Image.open(converted) as image:
+            self.assertEqual(image.size, (3, 2))
+            self.assertEqual(image.getpixel((0, 0)), (30, 90, 180))
+
+    def test_heic_input_is_decoded_when_the_optional_decoder_is_installed(self):
+        try:
+            import pi_heif
+        except ImportError:
+            self.skipTest("The optional HEIF decoder is not installed")
+        pi_heif.register_heif_opener(thumbnails=False)
+        source = self.root / "iphone.photo"
+        source.write_bytes((Path(__file__).parent / "fixtures" / "local-sample.heic").read_bytes())
+        checked = self.inspected(source)
+        self.assertEqual(checked["format"], "heic")
+        converted = convert_local_image(checked, "png", self.output)
+        with Image.open(converted) as image:
+            self.assertEqual(image.size, (checked["width"], checked["height"]))
+
+    def test_multipage_tiff_is_not_silently_reduced_to_first_page(self):
+        source = self.root / "pages.tiff"
+        with Image.new("RGB", (12, 12), "red") as first, Image.new("RGB", (12, 12), "blue") as second:
+            first.save(source, "TIFF", save_all=True, append_images=[second])
+        original = source.read_bytes()
+        checked = inspect_local_files([source])[0]
+        self.assertIn("Animated or multipage", checked["error"])
+        self.assertEqual(checked["targets"], [])
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_ico_never_silently_crops_or_resizes_source(self):
+        for size in ((32, 16), (512, 512)):
+            with self.subTest(size=size):
+                checked = self.inspected(self.image(f"source-{size[0]}.png", size=size))
+                self.assertNotIn("ico", checked["targets"])
+                with self.assertRaisesRegex(DownloadError, "compatible output format"):
+                    convert_local_image(checked, "ico", self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_bmp_background_and_gif_transparent_palette_do_not_turn_black_opaque_pixels_transparent(self):
+        source = self.root / "alpha.png"
+        with Image.new("RGBA", (32, 32), (0, 0, 0, 255)) as image:
+            image.putpixel((0, 0), (80, 150, 210, 0))
+            image.putpixel((1, 0), (80, 150, 210, 128))
+            image.save(source, "PNG")
+        checked = self.inspected(source)
+        self.assertIn("256 colors", checked["target_notes"]["gif"])
+        for background, expected in (("#FFFFFF", (255, 255, 255)), ("#000000", (0, 0, 0))):
+            bmp = convert_local_image(checked, "bmp", self.output, background)
+            with Image.open(bmp) as image:
+                self.assertEqual(image.getpixel((0, 0)), expected)
+                self.assertEqual(image.getpixel((2, 0)), (0, 0, 0))
+        gif = convert_local_image(checked, "gif", self.output)
+        with Image.open(gif) as image, image.convert("RGBA") as rgba:
+            self.assertEqual(rgba.getpixel((0, 0))[3], 0)
+            self.assertEqual(rgba.getpixel((2, 0)), (0, 0, 0, 255))
+            self.assertEqual(rgba.getpixel((1, 0))[3], 255)
 
 
 if __name__ == "__main__":

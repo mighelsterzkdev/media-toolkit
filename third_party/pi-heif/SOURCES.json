@@ -1,0 +1,23 @@
+[
+  {
+    "name": "pi-heif",
+    "version": "1.4.0",
+    "filename": "pi-heif-1.4.0.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/source/p/pi-heif/pi-heif-1.4.0.tar.gz",
+    "sha256": "e1199d9d41d9ecc877cf3ae7322ff099f6404574f2e62da47590cd4ecb9ec554"
+  },
+  {
+    "name": "libheif",
+    "version": "1.23.0",
+    "filename": "libheif-1.23.0.tar.gz",
+    "url": "https://github.com/strukturag/libheif/releases/download/v1.23.0/libheif-1.23.0.tar.gz",
+    "sha256": "4c9182b18897617182eed12ab5eb9f9d855b3aa3a736d6bdb31abc034ec7d393"
+  },
+  {
+    "name": "libde265",
+    "version": "1.1.1",
+    "filename": "libde265-1.1.1.tar.gz",
+    "url": "https://github.com/strukturag/libde265/releases/download/v1.1.1/libde265-1.1.1.tar.gz",
+    "sha256": "fd48a927e94ed74fc7ce8829d222b9d8599fcbfe8b6448ba66705babc56ab219"
+  }
+]

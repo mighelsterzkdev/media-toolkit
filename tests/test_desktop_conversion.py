@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import threading
 import time
@@ -12,6 +13,7 @@ from unittest.mock import patch
 from PIL import Image
 
 from universal_downloader.desktop_service import DesktopService
+from universal_downloader.dependencies import find_ffmpeg, hidden_process_options
 from universal_downloader.errors import DownloadError
 
 
@@ -119,7 +121,7 @@ class DesktopConversionTests(unittest.TestCase):
         first, second = [image["id"] for image in files]
         invalid = (([first, second], "jpg", "#FFFFFF"), ([first, "stale-id"], "webp", "#FFFFFF"),
                    ([first, first], "jpg", "#FFFFFF"), ([], "jpg", "#FFFFFF"),
-                   ([first], "gif", "#FFFFFF"), ([first], "jpg", "red"), ("first", "jpg", "#FFFFFF"),
+                   ([first], "exe", "#FFFFFF"), ([first], "jpg", "red"), ("first", "jpg", "#FFFFFF"),
                    ([True], "jpg", "#FFFFFF"))
         for identifiers, target, background in invalid:
             with self.subTest(identifiers=identifiers, target=target, background=background), self.assertRaises(DownloadError):
@@ -285,6 +287,56 @@ class DesktopConversionTests(unittest.TestCase):
         self.assertEqual(self.service.get_state()["conversion"]["files"], [])
         self.assertEqual(self.service._local_images, {})
         self.assertEqual(self.service._local_sources, {})
+
+    @unittest.skipUnless(find_ffmpeg(), "FFmpeg/ffprobe required")
+    def test_audio_and_video_use_real_contained_workers_and_private_metadata(self):
+        tools = find_ffmpeg()
+        ffmpeg = tools / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+        source = self.root / "video.data"
+        subprocess.run([str(ffmpeg), "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=64x48:r=10:d=0.3",
+                        "-f", "lavfi", "-i", "sine=frequency=440:duration=0.3", "-c:v", "libx264", "-c:a", "aac",
+                        "-shortest", "-f", "mp4", str(source)], check=True, capture_output=True, **hidden_process_options())
+        original = source.read_bytes()
+        files = self.select(source)
+        selected = files[0]
+        self.assertIsNone(selected["error"], files)
+        self.assertEqual(selected["media_type"], "video")
+        self.assertTrue(selected["has_audio"])
+        self.assertGreater(selected["duration"], 0)
+        self.assertIn("mp3", selected["targets"])
+        self.assertIn("webm", selected["targets"])
+        self.assertIn("first audio track", selected["target_notes"]["mp3"])
+        public = json.dumps(self.service.get_state())
+        self.assertNotIn(str(source), public)
+        self.assertNotIn("signature", public)
+        self.assertNotIn("_audio_index", public)
+        self.service.enqueue_conversions([selected["id"]], "mp3")
+        self.service.enqueue_conversions([selected["id"]], "webm")
+        state = self.complete(2)
+        self.assertTrue(all(task["status"] == "completed" for task in state["tasks"]), state)
+        self.assertTrue(all(task["action"] == "convert" and task["kind"] == "video" for task in state["tasks"]))
+        self.assertEqual({Path(task["path"]).suffix for task in state["tasks"]}, {".mp3", ".webm"})
+        self.assertEqual(source.read_bytes(), original)
+        self.assertEqual(list(self.output.glob(".unidown-convert-*")), [])
+
+    def test_animated_input_is_offered_without_flattening_frames(self):
+        source = self.root / "animation.gif"
+        with Image.new("RGB", (32, 24), "red") as first, Image.new("RGB", (32, 24), "blue") as second:
+            first.save(source, "GIF", save_all=True, append_images=[second], duration=[100, 200], loop=0)
+        selected = self.select(source)[0]
+        self.assertIsNone(selected["error"])
+        self.assertEqual(selected["media_type"], "animation")
+        self.assertEqual(selected["pages"], 2)
+        self.assertIn("apng", selected["targets"])
+        self.assertNotIn("jpg", selected["targets"])
+        self.service.enqueue_conversions([selected["id"]], "apng")
+        state = self.complete()
+        self.assertEqual(state["tasks"][0]["status"], "completed", state)
+        with Image.open(state["tasks"][0]["path"]) as image:
+            self.assertEqual(image.n_frames, 2)
+            self.assertEqual(image.info["duration"], 100)
+            image.seek(1)
+            self.assertEqual(image.info["duration"], 200)
 
 
 if __name__ == "__main__":

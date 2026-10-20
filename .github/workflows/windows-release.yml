@@ -29,7 +29,7 @@ jobs:
           $executable = Join-Path $bundle.FullName 'unidown.exe'
           python -B scripts/verify_portable.py $executable --bootstrap
           exit $LASTEXITCODE
-      - name: Check desktop image workers
+      - name: Check desktop conversion workers
         shell: pwsh
         run: |
           $bundle = Get-ChildItem -LiteralPath dist -Directory | Select-Object -First 1

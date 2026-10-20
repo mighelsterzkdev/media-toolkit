@@ -10,16 +10,84 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 from zipfile import ZIP_DEFLATED, ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_PACKAGES = (
-    "yt-dlp", "yt-dlp-ejs", "Pillow", "brotli", "certifi", "charset-normalizer", "idna",
+    "yt-dlp", "yt-dlp-ejs", "Pillow", "pi-heif", "brotli", "certifi", "charset-normalizer", "idna",
     "pycryptodomex", "requests", "urllib3", "websockets",
 )
+
+
+def heif_pyinstaller_options() -> list[str]:
+    """Collect the read-only HEIF wheel, including delvewheel's sibling DLLs."""
+    distribution = metadata.distribution("pi-heif")
+    if distribution.version != "1.4.0":
+        raise RuntimeError("Build with the pinned pi-heif 1.4.0 wheel.")
+    options = ["--collect-all", "pi_heif", "--hidden-import", "_pi_heif", "--exclude-module", "pillow_heif"]
+    libraries = [entry for entry in distribution.files or () if str(entry).lower().endswith(".dll")]
+    if not libraries or any("x265" in str(entry).lower() for entry in libraries):
+        raise RuntimeError("The HEIF wheel must contain the read-only libheif/libde265 binaries.")
+    for entry in libraries:
+        source = Path(distribution.locate_file(entry))
+        if not source.is_file():
+            raise RuntimeError(f"The HEIF binary is unavailable: {source.name}")
+        # pi_heif's delvewheel initializer adds its package parent to the DLL
+        # search path. Keep these independent, user-replaceable DLLs there.
+        options += ["--add-binary", f"{source};."]
+    return options
+
+
+def verify_heif_binaries(directory: Path) -> None:
+    distribution = metadata.distribution("pi-heif")
+    expected = [Path(entry).name for entry in distribution.files or () if str(entry).lower().endswith(".dll")]
+    missing = [name for name in expected if not (directory / name).is_file()]
+    if not expected or missing:
+        raise RuntimeError("The portable bundle is missing HEIF dependencies: " + ", ".join(missing))
+    if any("x265" in path.name.lower() for path in directory.glob("*.dll")):
+        raise RuntimeError("The portable bundle unexpectedly includes an HEVC encoder.")
+
+
+def write_heif_sources(destination: Path) -> None:
+    """Ship the decoder sources and notices with the independent shared DLLs."""
+    import certifi
+
+    notices = ROOT / "third_party" / "pi-heif"
+    records = json.loads((notices / "SOURCES.json").read_text(encoding="utf-8"))
+    package = destination / "pi-heif"
+    package.mkdir(parents=True, exist_ok=True)
+    for notice in notices.iterdir():
+        if notice.is_file():
+            shutil.copyfile(notice, package / notice.name)
+    cache = ROOT / ".tools" / "third-party-sources"
+    cache.mkdir(parents=True, exist_ok=True)
+    target = package / "sources"
+    target.mkdir(exist_ok=True)
+    for record in records:
+        cached = cache / record["filename"]
+        legacy = ROOT / ".tools" / record["filename"]
+        if not cached.is_file() and legacy.is_file() and _checksum(legacy) == record["sha256"]:
+            shutil.copyfile(legacy, cached)
+        if not cached.is_file() or _checksum(cached) != record["sha256"]:
+            partial = cached.with_suffix(cached.suffix + ".partial")
+            try:
+                request = Request(record["url"], headers={"User-Agent": "Media-Toolkit-release-builder"})
+                with urlopen(request, timeout=60, context=ssl.create_default_context(cafile=certifi.where())) as response, partial.open("wb") as output:
+                    shutil.copyfileobj(response, output)
+                if _checksum(partial) != record["sha256"]:
+                    raise RuntimeError(f"The HEIF source archive checksum did not match: {record['filename']}")
+                partial.replace(cached)
+            except (OSError, URLError) as error:
+                raise RuntimeError(f"Could not retrieve the pinned HEIF source archive: {record['filename']}") from error
+            finally:
+                partial.unlink(missing_ok=True)
+        shutil.copyfile(cached, target / cached.name)
 
 
 def write_notices(destination: Path) -> None:
@@ -55,6 +123,7 @@ def write_notices(destination: Path) -> None:
     if python_license.is_file():
         shutil.copyfile(python_license, destination / "PYTHON-LICENSE.txt")
     (destination / "INVENTORY.txt").write_text("\n".join(inventory) + "\n", encoding="utf-8")
+    write_heif_sources(destination)
     (destination / "EXTERNAL-TOOLS.txt").write_text(
         "External tools are not redistributed inside this application archive.\n"
         "On first use the application downloads checksum-pinned official publisher archives directly.\n"
@@ -93,12 +162,14 @@ def build(output: Path) -> Path:
             "--exclude-module", "mutagen",
             "--collect-all", "yt_dlp_ejs", "--collect-all", "PIL",
         ]
+        command += heif_pyinstaller_options()
         for package in RUNTIME_PACKAGES:
             command += ["--copy-metadata", package]
         command.append(str(ROOT / "scripts/portable_entry.py"))
         environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
         subprocess.run(command, cwd=ROOT, env=environment, check=True)
         verify_exclusions(working / "dist/unidown/unidown.exe")
+        verify_heif_binaries(working / "dist/unidown/_internal")
         shutil.copytree(working / "dist/unidown", bundle)
     shutil.copyfile(ROOT / "LICENSE", bundle / "LICENSE")
     write_notices(bundle / "licenses")

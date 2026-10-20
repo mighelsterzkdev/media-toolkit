@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "media-toolkit"
-version = "0.8.0"
-description = "Media Toolkit: download media and convert local images in a desktop app."
+version = "0.9.0"
+description = "Media Toolkit: download media and convert local images, audio, video and animations."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-dependencies = ["yt-dlp[default]==2026.8.19", "yt-dlp-ejs==0.8.0", "Pillow==12.3.0"]
+dependencies = ["yt-dlp[default]==2026.8.19", "yt-dlp-ejs==0.8.0", "Pillow==12.3.0", "pi-heif==1.4.0"]
 
 [project.optional-dependencies]
 desktop = ["pywebview==6.2.1"]

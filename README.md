@@ -1,6 +1,6 @@
 # Media Toolkit
 
-A desktop app with two tools: **Download** saves original media from a URL; **Convert** turns local static PNG, JPG and WebP images into another compatible format. Both tools share one queue. The original terminal downloader remains available.
+A desktop app with two tools: **Download** saves original media from a URL; **Convert** changes local images, audio, video and animations into compatible formats. Both tools share one queue. The original terminal downloader remains available.
 
 **Desktop: Windows 10/11 · React / shadcn/ui / pywebview**
 **Download engine and terminal: Python · yt-dlp · FFmpeg · Pillow · Windows / Linux / macOS**
@@ -35,36 +35,47 @@ Open **start.cmd** for the dark desktop interface. It uses bundled React and sha
 4. Use **Add multiple links** for several URLs. This explicitly queues each link's recommended original; ambiguous pages report that they need individual selection.
 5. Use **Browse** to select the download folder and **Settings** for optional limits. These use the same remembered preferences as the terminal.
 
-Checks, downloads and image conversions run in contained worker processes. Cancelling or closing stops the worker and its child tools without freezing the window. Supported interrupted transfers can be retried later. The queue itself is session-only; URLs and media choices are not saved between launches. Existing verified media and interrupted work still use the shared download engine's local history.
+Checks, downloads and conversions run in contained worker processes. Cancelling or closing stops the worker and its child tools without freezing the window. Supported interrupted transfers can be retried later. The queue itself is session-only; URLs and media choices are not saved between launches. Existing verified media and interrupted work still use the shared download engine's local history.
 
 The desktop app is tested on Windows x64 and requires the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), normally available on Windows 11. The app uses its own private renderer profile under local application data and does not access your signed-in browser. It loads only the packaged interface and does not open downloaded web pages inside the privileged window.
 
 **start-cli.cmd** opens the original terminal menu. **start.cmd** with arguments still forwards them to the terminal, so existing scripts continue to work. The installed commands are `media-toolkit` for the desktop and `unidown` for the terminal. `unidown-gui` remains a compatible desktop alias.
 
-## Convert local images
+## Convert local files
 
-Open **Convert** and click **Add files** to choose up to 100 local PNG, JPEG or WebP images. The app verifies their actual contents before showing compatible output formats. Select files, choose **PNG**, **JPG** or **WebP**, select the destination, then click **Convert**. Completed image downloads also have a **Convert file** shortcut.
+Open **Convert** and click **Add files** to choose up to 100 local media files. The app checks their actual contents and available encoders before showing output formats. Choose a format, review the compatible-file count, select the destination, then click **Convert**. A mixed selection converts only the files compatible with that target; the app shows how many files will be skipped. Eligible completed downloads also have a **Convert file** shortcut.
 
-- Conversion runs locally and works without FFmpeg, Deno or internet access.
+| Content | Output formats |
+| --- | --- |
+| Still images | PNG, JPG, WebP, AVIF, BMP, TIFF, ICO, TGA, GIF, JPEG 2000 (JP2) |
+| Audio, including audio extracted from video | MP3, WAV, FLAC, M4A, AAC, Opus, Ogg Vorbis, AIFF |
+| Video | MP4, MKV, MOV, WebM |
+| Animation | GIF, animated WebP, APNG, MP4 |
+
+Image inputs include JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF, GIF, ICO, TGA, JPEG 2000, PCX, PNM, DDS, flat PSD, QOI, SGI and XBM when readable by the bundled decoders. Audio/video inputs include common MP3, WAV, FLAC, M4A, AAC, Ogg, Opus, AIFF, MP4, MKV, MOV, WebM, AVI, MPEG, WMV and FLV files. Actual codec support matters more than the filename extension; unreadable files report their own error.
+
+- Conversion runs locally. Static images and image animations work offline; audio/video encoding and MP4 animation output need FFmpeg/ffprobe. Deno is only used by the downloader.
 - Original files remain intact. Existing destination files are preserved and repeated names receive a numeric suffix.
-- PNG and WebP preserve transparency. WebP output is lossless. JPG uses quality 90 and an explicit white or black background when flattening transparency.
-- EXIF orientation is applied. Animated and multipage images are rejected rather than reduced silently to one frame.
-- Each input is limited to 128 MiB and 40 million pixels. Unreadable files have individual errors, so valid files can still be selected.
+- PNG and lossless WebP preserve transparency. JPG and BMP use an explicit white or black background when flattening transparency. GIF uses a 256-color palette, preserves fully transparent pixels and blends partial transparency with the selected background.
+- EXIF orientation is applied. Animation keeps its frames and timing. Multipage documents are rejected rather than silently reduced to one page. ICO keeps the original dimensions and is offered only for square images up to 256 pixels.
+- Image inputs are limited to 128 MiB and 40 million pixels; animations have additional decoded-frame limits. Available formats reflect the source, its streams and installed codecs. Native copies are omitted.
 - A file changed after inspection must be added again. Queued tasks keep their own source, target, background and destination snapshots.
 - The shared queue supports cancellation, retry and opening completed output folders. Switching tabs preserves selections and running operations.
+
+MP4/MKV/MOV use H.264 video and AAC audio; WebM uses VP9 and Opus. Video conversions keep the first video and first audio stream. Audio extraction uses the first audio stream, and silent video does not offer audio targets. Output notes describe compression, transparency and omitted tracks. Local conversion re-encodes media and does not preserve every source metadata field; use the downloader's **Original** option when an unchanged available source is wanted.
 
 ## Windows portable release
 
 1. Download the Windows x64 ZIP and `SHA256SUMS.txt` from [GitHub Releases](https://github.com/mighelsterzkdev/media-toolkit/releases).
 2. Extract the complete ZIP into a writable folder. Keep `_internal` and `_desktop` beside `unidown.exe` and `media-toolkit.exe`.
 3. Open **start.cmd**. Python and administrator access are not required.
-4. Image conversion is ready offline. If download tools are missing, click **Install tools**. The app downloads pinned FFmpeg/ffprobe and Deno archives directly from their publishers, verifies SHA-256 checksums, and stores them in `.tools` beside the app. Setup reports progress, retries temporary server failures, and explains download, permission, or integrity failures. The terminal prepares missing tools before its first media command.
+4. Image conversion is ready offline. For downloads or audio/video conversion, click **Install tools** if needed. The app downloads pinned FFmpeg/ffprobe and Deno archives directly from their publishers, verifies SHA-256 checksums, and stores them in `.tools` beside the app. Setup reports progress, retries temporary server failures, and explains download, permission, or integrity failures. The terminal prepares missing tools before its first media command.
 
 Downloads go into the extracted folder's `downloads` directory when launched through `start.cmd`. From another terminal directory, either use `--output` or open `start.cmd` to keep that location predictable.
 
 ```powershell
 # Check the ZIP against the published checksum before extraction
-Get-FileHash .\media-toolkit-0.8.0-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\media-toolkit-0.9.0-windows-x64.zip -Algorithm SHA256
 
 # Prepare the external tools without opening the menu
 .\unidown.exe --install-tools

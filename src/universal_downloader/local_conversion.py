@@ -12,7 +12,14 @@ import stat
 import tempfile
 import warnings
 
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError, features
+
+try:
+    from pi_heif import register_heif_opener
+except ImportError:  # The image-only core remains usable without optional HEIF.
+    pass
+else:
+    register_heif_opener(thumbnails=False)
 
 from .conversions import _encode_static_image, _image_has_transparency
 from .errors import DownloadError
@@ -20,8 +27,26 @@ from .storage import PreparedFile
 
 MAX_LOCAL_IMAGE_BYTES = 128 * 1024 * 1024
 MAX_LOCAL_IMAGE_PIXELS = 40_000_000
-LOCAL_IMAGE_FORMATS = {"PNG": "png", "JPEG": "jpg", "WEBP": "webp"}
-_ENCODERS = {"png": "PNG", "jpg": "JPEG", "webp": "WEBP"}
+LOCAL_IMAGE_FORMATS = {
+    "PNG": "png", "JPEG": "jpg", "WEBP": "webp", "AVIF": "avif",
+    "HEIF": "heic", "HEIC": "heic", "BMP": "bmp", "DIB": "bmp",
+    "TIFF": "tiff", "GIF": "gif", "ICO": "ico", "TGA": "tga",
+    "JPEG2000": "jp2", "PCX": "pcx", "PPM": "pnm", "DDS": "dds",
+    "PSD": "psd", "QOI": "qoi", "SGI": "sgi", "XBM": "xbm",
+}
+_ENCODERS = {
+    "png": "PNG", "jpg": "JPEG", "webp": "WEBP", "avif": "AVIF",
+    "bmp": "BMP", "tiff": "TIFF", "ico": "ICO", "tga": "TGA",
+    "gif": "GIF", "jp2": "JPEG2000",
+}
+_ENCODER_FEATURES = {"png": "zlib", "jpg": "jpg", "webp": "webp", "avif": "avif", "tiff": "libtiff", "jp2": "jpg_2000"}
+IMAGE_TARGET_NOTES = {
+    "jpg": "Lossy image. Transparency uses the selected background.",
+    "bmp": "Uncompressed image. Transparency uses the selected background.",
+    "gif": "Still image with up to 256 colors. Fully transparent pixels stay transparent; partial transparency uses the selected background.",
+    "ico": "One icon at the original size; square images up to 256 pixels.",
+    "avif": "Compact image using high-quality lossy compression.",
+}
 _BACKGROUNDS = frozenset(("#FFFFFF", "#000000"))
 
 
@@ -68,10 +93,12 @@ def _decoded(data: bytes):
             with Image.open(BytesIO(data)) as checked:
                 native = LOCAL_IMAGE_FORMATS.get(checked.format)
                 if native is None:
-                    raise DownloadError("Only static PNG, JPG, and WebP images are supported.")
+                    raise DownloadError("This image format is not supported by the installed image decoders.")
                 if checked.width * checked.height > MAX_LOCAL_IMAGE_PIXELS:
                     raise DownloadError("This image exceeds the 40 million pixel limit.")
-                if getattr(checked, "is_animated", False) or getattr(checked, "n_frames", 1) != 1:
+                # A flat PSD reports zero editable layers while still exposing
+                # its one merged image. Multiple pages/layers must stay intact.
+                if getattr(checked, "is_animated", False) or getattr(checked, "n_frames", 1) > 1:
                     raise DownloadError("Animated or multipage images are not supported. The original file was kept.")
                 checked.verify()
             with Image.open(BytesIO(data)) as opened:
@@ -80,7 +107,7 @@ def _decoded(data: bytes):
     except (Image.DecompressionBombWarning, Image.DecompressionBombError, MemoryError) as error:
         raise DownloadError("This image is too large to process.") from error
     except (UnidentifiedImageError, OSError, ValueError, SyntaxError) as error:
-        raise DownloadError("This file is not a readable PNG, JPG, or WebP image.") from error
+        raise DownloadError("This file is not a readable supported image.") from error
     try:
         yield native, oriented
     finally:
@@ -88,9 +115,15 @@ def _decoded(data: bytes):
             oriented.close()
 
 
-def _targets(native: str) -> list[str]:
+def _targets(native: str, width: int | None = None, height: int | None = None) -> list[str]:
     Image.init()
-    return [target for target, encoder in _ENCODERS.items() if target != native and encoder in Image.SAVE]
+    supported_features = frozenset(features.get_supported())
+    return [
+        target for target, encoder in _ENCODERS.items()
+        if target != native and encoder in Image.SAVE
+        and (target not in _ENCODER_FEATURES or _ENCODER_FEATURES[target] in supported_features)
+        and (target != "ico" or width is not None and height is not None and width == height and 1 <= width <= 256)
+    ]
 
 
 def inspect_local_files(paths) -> list[dict]:
@@ -98,7 +131,8 @@ def inspect_local_files(paths) -> list[dict]:
     results = []
     for selected in paths:
         result = {"name": "Image", "format": None, "width": None, "height": None, "size": None,
-                  "transparent": False, "targets": [], "error": None, "source": None, "signature": None}
+                  "media_type": "image", "animated": False, "pages": 1,
+                  "transparent": False, "targets": [], "target_notes": {}, "error": None, "source": None, "signature": None}
         try:
             if not isinstance(selected, (str, os.PathLike)):
                 raise DownloadError("Select a local image file.")
@@ -107,8 +141,10 @@ def inspect_local_files(paths) -> list[dict]:
             data, signature = _snapshot(source)
             result.update(size=len(data), signature=signature)
             with _decoded(data) as (native, image):
+                targets = _targets(native, image.width, image.height)
                 result.update(format=native, width=image.width, height=image.height,
-                              transparent=_image_has_transparency(image), targets=_targets(native))
+                              transparent=_image_has_transparency(image), targets=targets,
+                              target_notes={target: IMAGE_TARGET_NOTES[target] for target in targets if target in IMAGE_TARGET_NOTES})
         except DownloadError as error:
             result["error"] = str(error)
         except (OSError, ValueError, TypeError, RuntimeError) as error:
@@ -164,9 +200,9 @@ def _work_directory(output_dir: Path, work_dir: Path | None):
 def convert_local_image(image: dict, target: str, output_dir: Path, background="#FFFFFF", progress_hook=None, *, work_dir: Path | None = None) -> Path:
     """Convert a checked snapshot; publish a unique complete file atomically."""
     if not isinstance(target, str) or target not in _ENCODERS:
-        raise DownloadError("Choose PNG, JPG, or WebP as the output format.")
+        raise DownloadError("Choose a supported image output format.")
     if not isinstance(background, str) or background not in _BACKGROUNDS:
-        raise DownloadError("Choose a white or black background for JPG.")
+        raise DownloadError("Choose a white or black conversion background.")
     if not isinstance(image, dict) or image.get("error") or not image.get("source") or not isinstance(image.get("signature"), dict):
         raise DownloadError("Check this image before converting it.")
     source = Path(image["source"]).resolve()
@@ -175,7 +211,7 @@ def convert_local_image(image: dict, target: str, output_dir: Path, background="
         raise DownloadError("The source file changed after it was checked. Add it again before converting.")
     try:
         with _decoded(data) as (native, opened):
-            if target not in _targets(native):
+            if target not in _targets(native, opened.width, opened.height):
                 raise DownloadError("Choose a different compatible output format for this image.")
             destination_dir = Path(output_dir).resolve()
             destination_dir.mkdir(parents=True, exist_ok=True)

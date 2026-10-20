@@ -5,13 +5,17 @@ export interface MediaAsset { id: string; title: string; description: string; th
 export interface Inspection {
   status: 'idle' | 'checking' | 'ready' | 'failed'; id: string | null; url: string; error: string | null; assets: MediaAsset[]
 }
-export type ImageFormat = 'png' | 'jpg' | 'webp'
-export interface LocalImage {
+export type ConversionFormat = string
+export type ImageFormat = ConversionFormat
+export interface LocalFile {
   id: string; name: string; format: string | null; width: number | null; height: number | null;
-  size: number | null; transparent: boolean; targets: ImageFormat[]; error: string | null
+  size: number | null; transparent: boolean; targets: ConversionFormat[]; error: string | null;
+  media_type?: 'image' | 'audio' | 'video' | 'animation'; duration?: number | null; animated?: boolean;
+  pages?: number; has_audio?: boolean; target_notes?: Record<string, string>; requires_tools?: boolean
 }
+export type LocalImage = LocalFile
 export interface Conversion {
-  status: 'idle' | 'checking' | 'ready' | 'failed'; id: string | null; files: LocalImage[]; error: string | null
+  status: 'idle' | 'checking' | 'ready' | 'failed'; id: string | null; files: LocalFile[]; error: string | null
 }
 export type TaskStatus = 'queued' | 'checking' | 'downloading' | 'converting' | 'finalizing' | 'completed' | 'existing' | 'failed' | 'cancelled' | 'cancelling'
 export interface DownloadTask {
@@ -42,7 +46,7 @@ export interface DesktopApi {
   select_conversion_files(): Promise<ApiResult>;
   remove_conversion_file(id: string): Promise<ApiResult>;
   clear_conversion_files(): Promise<ApiResult>;
-  enqueue_conversions(ids: string[], target: ImageFormat, background: '#FFFFFF' | '#000000'): Promise<ApiResult>;
+  enqueue_conversions(ids: string[], target: ConversionFormat, background: '#FFFFFF' | '#000000'): Promise<ApiResult>;
   prepare_conversion(taskId: string): Promise<ApiResult>;
 }
 declare global { interface Window { pywebview?: { api: DesktopApi } } }

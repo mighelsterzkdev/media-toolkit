@@ -300,18 +300,18 @@ class DesktopService:
 
     def add_conversion_files(self, paths):
         if not isinstance(paths, (list, tuple)) or not paths or len(paths) > MAX_CONVERSION_FILES:
-            raise DownloadError("Choose between 1 and 100 image files.")
+            raise DownloadError("Choose between 1 and 100 media files.")
         normalized = []
         for value in paths:
             if not isinstance(value, (str, Path)):
-                raise DownloadError("Choose valid local image files.")
+                raise DownloadError("Choose valid local media files.")
             value = str(value)
             if not value or len(value) > 8192 or any(ord(character) < 32 for character in value) or not Path(value).is_absolute():
-                raise DownloadError("Choose valid local image files with absolute paths.")
+                raise DownloadError("Choose valid local media files with absolute paths.")
             try:
                 normalized.append(str(Path(value).resolve()))
             except (OSError, ValueError) as error:
-                raise DownloadError("This image file path could not be opened.") from error
+                raise DownloadError("This file path could not be opened.") from error
         with self._lock:
             self._ensure_open()
             known = {os.path.normcase(source) for source in self._local_sources.values()}
@@ -346,14 +346,15 @@ class DesktopService:
                 elif event == "error":
                     raise DownloadError(payload["message"], code=payload["code"])
             if not isinstance(result, list) or len(result) != len(sources):
-                raise DownloadError("The image check stopped before returning its result. Add the files again.")
+                raise DownloadError("The file check stopped before returning its result. Add the files again.")
             with self._lock:
                 if self._closed or generation != self._conversion_generation:
                     return
                 files, images = [], {}
                 for (identifier, source), image in zip(sources, result):
                     # Only a fixed metadata schema crosses the native bridge.
-                    public = {key: image.get(key) for key in ("format", "width", "height", "size", "transparent", "targets", "error")}
+                    public = {key: image.get(key) for key in ("format", "width", "height", "size", "transparent", "targets", "error",
+                                                             "media_type", "duration", "animated", "pages", "has_audio", "target_notes", "requires_tools")}
                     public.update(id=identifier, name=_text(Path(source).name, 300))
                     files.append(public)
                     if not image.get("error"):
@@ -372,7 +373,7 @@ class DesktopService:
         with self._lock:
             self._ensure_open()
             if not isinstance(identifier, str) or identifier not in self._local_sources:
-                raise DownloadError("This selected image no longer exists.")
+                raise DownloadError("This selected file no longer exists.")
             self._local_sources.pop(identifier)
             self._conversion["files"] = [image for image in self._conversion["files"] if image["id"] != identifier]
             launch = self._start_local_check()
@@ -388,34 +389,43 @@ class DesktopService:
         self._launch_local_check(*launch)
         return self.get_state()
 
+    def refresh_conversion_files(self):
+        """Recheck selected files when newly installed codecs become available."""
+        with self._lock:
+            if self._closed or not self._local_sources:
+                return self.get_state()
+            launch = self._start_local_check()
+        self._launch_local_check(*launch)
+        return self.get_state()
+
     def enqueue_conversions(self, identifiers, target, background="#FFFFFF"):
         if (not isinstance(identifiers, list) or not identifiers or len(identifiers) > MAX_CONVERSION_FILES
                 or any(not isinstance(identifier, str) for identifier in identifiers) or len(set(identifiers)) != len(identifiers)):
-            raise DownloadError("Select between 1 and 100 checked image files.")
-        if target not in ("png", "jpg", "webp") or background not in ("#FFFFFF", "#000000"):
-            raise DownloadError("Choose an available image format and a white or black JPEG background.")
+            raise DownloadError("Select between 1 and 100 checked media files.")
+        if not isinstance(target, str) or not re.fullmatch(r"[a-z0-9]{2,8}", target) or background not in ("#FFFFFF", "#000000"):
+            raise DownloadError("Choose an available output format and a white or black background.")
         with self._lock:
             self._ensure_open()
             if self._conversion["status"] != "ready":
-                raise DownloadError("Wait for the selected images to be checked before converting.")
+                raise DownloadError("Wait for the selected files to be checked before converting.")
             records = []
             for identifier in identifiers:
                 image = self._local_images.get(identifier)
                 if image is None or target not in image["targets"]:
-                    raise DownloadError("Choose a compatible format for every selected image.")
+                    raise DownloadError("Choose a compatible format for every submitted file.")
                 records.append(deepcopy(image))
             settings = deepcopy(self._settings)
-            # Background only affects alpha flattened into JPEG. Irrelevant
+            # Background only affects outputs with reduced alpha. Irrelevant
             # settings must not make two identical conversions distinct.
             identities = [("convert", image["source"], image["signature"], target,
-                           background if target == "jpg" and image["transparent"] else None, settings["output"]) for image in records]
+                           background if target in ("jpg", "bmp", "gif", "mp4") and image["transparent"] else None, settings["output"]) for image in records]
             active = [task["_identity"] for task in self._tasks if task["status"] not in TERMINAL]
             additions = [(image, identity) for image, identity in zip(records, identities) if identity not in active]
             if len(self._tasks) + len(additions) > MAX_QUEUE_URLS:
                 raise DownloadError("The queue supports up to 1,000 items. Remove finished items first.")
             for image, identity in additions:
                 self._tasks.append({"id": uuid4().hex, "url": "", "title": _text(image["name"], 300), "action": "convert",
-                                    "source_format": image["format"], "can_convert": False, "kind": "image", "format": target,
+                                    "source_format": image["format"], "can_convert": False, "kind": image.get("media_type", "image"), "format": target,
                                     "status": "queued", "progress": None, "downloaded_bytes": 0, "total_bytes": None,
                                     "speed": None, "eta": None, "path": None, "error": None,
                                     "_identity": identity, "_settings": deepcopy(settings), "_image": image,
@@ -568,7 +578,7 @@ class DesktopService:
                                 path=str(path), title=_text(result["title"], 300), error=None, speed=None, eta=None,
                                 can_convert=bool(result.get("can_convert")))
                 else:
-                    message = "The image conversion stopped before completing. Retry to convert it again." if task["action"] == "convert" else "The media worker stopped before completing the download. Retry to continue a supported partial download."
+                    message = "The file conversion stopped before completing. Retry to convert it again." if task["action"] == "convert" else "The media worker stopped before completing the download. Retry to continue a supported partial download."
                     raise DownloadError(message)
                 self._compact_task(task)
         except BaseException as error:

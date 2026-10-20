@@ -118,7 +118,7 @@ class DesktopApi:
         return self._call(self._service.cancel_task, task_id)
 
     def retry_task(self, task_id):
-        # Local image conversions do not use the optional download tools.
+        # Local conversion validates its own codec requirements in the worker.
         def retry():
             tasks = self._service.get_state().get("tasks", ())
             if not any(task.get("id") == task_id and task.get("action") == "convert" for task in tasks):
@@ -153,7 +153,10 @@ class DesktopApi:
                 self._webview.FileDialog.OPEN,
                 directory=str(directory if directory.is_dir() else Path.home()),
                 allow_multiple=True,
-                file_types=("Images (*.png;*.jpg;*.jpeg;*.webp)", "All files (*.*)"),
+                file_types=(
+                    "Media files (*.png;*.jpg;*.jpeg;*.webp;*.avif;*.heic;*.heif;*.bmp;*.tif;*.tiff;*.gif;*.apng;*.ico;*.tga;*.jp2;*.psd;*.pcx;*.pnm;*.ppm;*.pgm;*.pbm;*.dds;*.qoi;*.sgi;*.xbm;*.mp3;*.wav;*.flac;*.m4a;*.aac;*.opus;*.ogg;*.aif;*.aiff;*.wma;*.mp4;*.mkv;*.mov;*.webm;*.avi;*.m4v;*.mpeg;*.mpg;*.wmv;*.flv;*.ts;*.mts;*.m2ts)",
+                    "All files (*.*)",
+                ),
             )
             return self._service.add_conversion_files(list(paths)) if paths else self._service.get_state()
         return self._call(select)
@@ -170,7 +173,7 @@ class DesktopApi:
     def prepare_conversion(self, task_id):
         def prepare():
             if not isinstance(task_id, str) or not task_id or len(task_id) > 100:
-                raise DownloadError("Choose a completed image to convert.")
+                raise DownloadError("Choose a completed file to convert.")
             source = self._service.completed_path(task_id)
             # This shortcut starts a conversion for that file, rather than
             # mixing it with an unrelated previous selection.
@@ -225,10 +228,16 @@ class DesktopApi:
                 if self._tools["status"] != "ready":
                     raise DownloadError("Some download tools are still missing. Try preparing them again.")
         except Exception as error:
+            # FFmpeg may have installed successfully even if Deno failed. Local
+            # audio/video conversion can use it independently of download setup.
+            self._refresh_tools()
             with self._tools_lock:
                 self._tools["status"] = "failed"
                 self._tools["error"] = _safe_error(error)
                 self._tools["message"] = None
+        finally:
+            if not self._closed:
+                self._service.refresh_conversion_files()
 
 
 class _AssetHandler(BaseHTTPRequestHandler):

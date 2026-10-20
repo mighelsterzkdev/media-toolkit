@@ -143,6 +143,7 @@ class DesktopBridgeTests(unittest.TestCase):
                 finish.set()
                 self.api._installer.join(3)
         self.assertEqual(self.api.get_state()["state"]["tools"]["status"], "ready")
+        self.service.refresh_conversion_files.assert_called_once_with()
 
     def test_tool_failure_preserves_specific_reason_and_clears_old_progress(self):
         from universal_downloader.tool_setup import ToolSetupError
@@ -157,6 +158,18 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(tools["status"], "failed")
         self.assertIn("HTTP 503", tools["error"])
         self.assertIsNone(tools["message"])
+
+    def test_partial_setup_refreshes_converter_when_ffmpeg_is_ready_but_deno_failed(self):
+        from universal_downloader.tool_setup import ToolSetupError
+        self.api._tools.update(status="missing", ffmpeg=False, javascript=False)
+        with patch("universal_downloader.tool_setup.prepare_tools", side_effect=ToolSetupError("Deno download failed.")), patch.object(gui, "find_ffmpeg", return_value=Path("ffmpeg")), patch.object(gui, "find_js_runtime", return_value=None):
+            self.api.install_tools()
+            self.api._installer.join(3)
+        tools = self.api.get_state()["state"]["tools"]
+        self.assertEqual(tools["status"], "failed")
+        self.assertTrue(tools["ffmpeg"])
+        self.assertFalse(tools["javascript"])
+        self.service.refresh_conversion_files.assert_called_once_with()
 
     def test_resume_cleanup_uses_only_current_output_scope(self):
         self.service.output_directory.return_value = Path.cwd()

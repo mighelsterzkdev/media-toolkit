@@ -45,6 +45,10 @@ export default function App() {
   const busy = pending != null
   const installing = state.tools.status === 'installing'
   const toolsReady = state.tools.status === 'ready'
+  const showToolsNotice = tab === 'download' ? !toolsReady : state.tools.ffmpeg === false
+  const toolsMessage = tab === 'convert' && !installing && state.tools.status !== 'failed'
+    ? 'Install FFmpeg for audio and video conversion. Images can still be converted offline.'
+    : state.tools.message || state.tools.error || (installing ? 'Installing media tools…' : 'Install media tools to enable downloads. Local image conversion is ready to use.')
   const canDownload = connected && toolsReady && ready && asset && kind && option && !downloadBusy && !busy
   const Icon = mediaIcon(kind?.id ?? '')
 
@@ -87,11 +91,11 @@ export default function App() {
       <SettingsDialog state={state} disabled={disconnected} busy={busy} onSave={value => invoke('save_settings', value)} onClearResume={() => invoke('clear_resume')} />
     </header>
 
-    {!connected || error || state.notice || (tab === 'download' && state.tools.status !== 'ready') ? <div className="app-notices">
+    {!connected || error || state.notice || showToolsNotice ? <div className="app-notices">
     {!connected ? <div className="notice" role="status"><CircleAlert className="size-4 shrink-0" /><span>Waiting for the desktop connection. Open this app with Media Toolkit.</span></div> : null}
     {error ? <div className="notice notice-error" role="alert"><CircleAlert className="size-4 shrink-0" /><span>{error}</span><Button variant="ghost" size="icon" aria-label="Dismiss error" onClick={dismissError}><X /></Button></div> : null}
     {state.notice ? <div className="notice" role="status"><span>{state.notice}</span></div> : null}
-    {connected && tab === 'download' && state.tools.status !== 'ready' ? <div className="notice tools-notice" role="status"><CircleAlert className="size-4 shrink-0" /><span>{state.tools.message || state.tools.error || (state.tools.status === 'installing' ? 'Installing media tools…' : 'Install media tools to enable downloads. Local image conversion is ready to use.')}</span><Button variant="outline" size="sm" disabled={state.tools.status === 'installing' || busy} onClick={() => void invoke('install_tools')}>{state.tools.status === 'installing' ? <LoaderCircle className="animate-spin" /> : null}{state.tools.status === 'failed' ? 'Retry installation' : 'Install tools'}</Button></div> : null}
+    {connected && showToolsNotice ? <div className="notice tools-notice" role="status"><CircleAlert className="size-4 shrink-0" /><span>{toolsMessage}</span><Button variant="outline" size="sm" disabled={installing || busy} onClick={() => void invoke('install_tools')}>{installing ? <LoaderCircle className="animate-spin" /> : null}{state.tools.status === 'failed' ? 'Retry installation' : 'Install tools'}</Button></div> : null}
     </div> : null}
 
     <main className="app-content">
@@ -131,7 +135,7 @@ export default function App() {
       </section>
       </TabsContent>
       <TabsContent value="convert" forceMount hidden={tab !== 'convert'} className="tool-panel">
-        <ConvertPanel conversion={state.conversion} output={state.settings.output} disabled={disconnected || busy} onAdd={() => void invoke('select_conversion_files')} onRemove={id => void invoke('remove_conversion_file', id)} onClear={() => void invoke('clear_conversion_files')} onBrowse={() => void invoke('browse_folder')} onConvert={(ids, target, background) => invoke('enqueue_conversions', ids, target, background)} />
+        <ConvertPanel conversion={state.conversion} output={state.settings.output} disabled={disconnected || busy} ffmpegReady={state.tools.ffmpeg !== false} onAdd={() => void invoke('select_conversion_files')} onRemove={id => void invoke('remove_conversion_file', id)} onClear={() => void invoke('clear_conversion_files')} onBrowse={() => void invoke('browse_folder')} onConvert={(ids, target, background) => invoke('enqueue_conversions', ids, target, background)} />
       </TabsContent>
       <TaskList tasks={state.tasks} disabled={disconnected || busy} retryDisabled={!toolsReady} onCancel={id => void invoke('cancel_task', id)} onRetry={id => void invoke('retry_task', id)} onOpen={id => void invoke('open_folder', id)} onClear={() => void invoke('remove_finished')} onConvert={id => void prepareConversion(id)} />
     </main>

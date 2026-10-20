@@ -3,7 +3,7 @@
 from importlib import metadata
 import re
 
-TESTED_VERSIONS = {"yt-dlp": "2026.8.19", "yt-dlp-ejs": "0.8.0", "Pillow": "12.3.0"}
+TESTED_VERSIONS = {"yt-dlp": "2026.8.19", "yt-dlp-ejs": "0.8.0", "Pillow": "12.3.0", "pi-heif": "1.4.0"}
 
 
 def _version(value: str) -> str:

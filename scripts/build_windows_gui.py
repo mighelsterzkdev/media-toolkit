@@ -86,6 +86,7 @@ def build(output: Path) -> Path:
             "--hidden-import", "webview.platforms.edgechromium", "--hidden-import", "webview.platforms.winforms",
             "--add-data", f"{assets};universal_downloader/desktop_assets",
         ]
+        command += build_windows.heif_pyinstaller_options()
         for module in ("yt_dlp.__pyinstaller", "PyInstaller", "mutagen", "webview.platforms.qt", "webview.platforms.gtk", "webview.platforms.cocoa", "webview.platforms.cef", "webview.platforms.android", "webview.platforms.mshtml", "PyQt5", "PyQt6", "PySide2", "PySide6", "tkinter"):
             command += ["--exclude-module", module]
         for package in (*build_windows.RUNTIME_PACKAGES, *DESKTOP_PACKAGES):
@@ -94,6 +95,7 @@ def build(output: Path) -> Path:
         subprocess.run(command, cwd=ROOT, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"), check=True)
         executable = working / "dist/media-toolkit/media-toolkit.exe"
         build_windows.verify_exclusions(executable)
+        build_windows.verify_heif_binaries(executable.parent / "_desktop")
         verify_gui_manifest(executable)
         shutil.copyfile(executable, bundle / executable.name)
         shutil.copytree(executable.parent / "_desktop", bundle / "_desktop")
@@ -111,10 +113,13 @@ def build(output: Path) -> Path:
         "The desktop app uses the installed Microsoft Edge WebView2 Runtime (normally present on Windows 11).\n"
         "Runtime installer if needed: https://developer.microsoft.com/microsoft-edge/webview2/\n"
         "Download tab: paste a link, click Check, choose an output, then click Download.\n"
-        "Convert tab: add local PNG, JPEG or WebP files, choose a compatible format, then click Convert.\n"
-        "Image conversion works offline without the optional download tools and preserves the source files.\n"
+        "Convert tab: add images, audio, video or animations, choose a compatible format, then click Convert.\n"
+        "Images: PNG, JPG, WebP, AVIF, BMP, TIFF, ICO, TGA, GIF, JP2. HEIC/HEIF input is supported.\n"
+        "Audio: MP3, WAV, FLAC, M4A, AAC, Opus, Ogg, AIFF. Video: MP4, MKV, MOV, WebM.\n"
+        "Animations: GIF, animated WebP, APNG, MP4. Original files are preserved.\n"
+        "Images work offline. Audio/video conversion and MP4 animation output need FFmpeg/ffprobe.\n"
         "Use the queue for several links. Nothing starts until you explicitly add downloads.\n"
-        "For downloads, click Install tools if needed to prepare checksum-pinned FFmpeg/Deno archives from their publishers.\n"
+        "Click Install tools if needed to prepare checksum-pinned FFmpeg/Deno archives from their publishers.\n"
         "Downloads default to downloads/ beside this program. Settings persist in local application data.\n\n"
         "Open start-cli.cmd or run unidown.exe --help for the terminal interface.\n"
         "CLI examples: unidown.exe --doctor | unidown.exe --batch links.txt | unidown.exe --version\n"

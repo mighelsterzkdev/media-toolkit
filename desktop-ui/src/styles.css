@@ -86,7 +86,7 @@
   .empty-downloads { @apply flex min-h-0 flex-1 flex-col items-center justify-center gap-3 overflow-y-auto p-4 text-center text-muted-foreground; }
   .empty-downloads p { @apply text-base text-foreground; }
   .empty-downloads span { @apply text-sm; }
-  .task-list { @apply min-h-0 flex-1 overflow-y-auto rounded-md border; scrollbar-gutter: stable; }
+  .task-list { @apply min-h-0 flex-initial overflow-y-auto rounded-md border; scrollbar-gutter: stable; }
   .task-row { @apply flex min-h-20 items-start gap-4 border-b p-4 last:border-b-0; }
   .task-icon { @apply flex size-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground; }
   .task-icon-done { @apply text-emerald-400; }
@@ -136,6 +136,10 @@
   .file-checkbox { @apply size-4 shrink-0 cursor-pointer rounded disabled:cursor-not-allowed disabled:opacity-50; accent-color: hsl(var(--primary)); }
   .conversion-options { @apply space-y-3 pb-4; }
   .conversion-options > .kind-options { @apply mb-0; }
+  .conversion-target-field { @apply flex flex-wrap items-center gap-x-4 gap-y-2; }
+  .conversion-target-field > button { @apply w-72 max-w-full; }
+  .conversion-format-count { @apply text-sm text-muted-foreground; }
+  .conversion-file-copy > .conversion-file-skip { @apply text-amber-300; }
   .alpha-background { @apply flex flex-wrap items-center gap-x-6 gap-y-2; }
   .alpha-background > p { @apply basis-full text-sm leading-6 text-muted-foreground; }
   .background-choice { @apply flex min-h-6 cursor-pointer items-center gap-2; }

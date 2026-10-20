@@ -118,16 +118,48 @@ def _image_has_transparency(image: Image.Image) -> bool:
 
 def _encode_static_image(image: Image.Image, target: str, output, *, background="#FFFFFF") -> None:
     """One encoder for checked, oriented downloads and local still images."""
-    if target == "jpg":
+    # Keep an embedded color profile only when the pixels remain in its RGB
+    # color space. A CMYK profile must never be attached to converted RGB data.
+    profile = image.info.get("icc_profile") if image.mode in ("RGB", "RGBA", "P") else None
+    metadata = {"icc_profile": profile} if isinstance(profile, bytes) and profile else {}
+    if target in ("jpg", "bmp"):
         with image.convert("RGBA") as rgba, Image.new("RGB", rgba.size, background) as flattened, rgba.getchannel("A") as alpha:
             flattened.paste(rgba, mask=alpha)
-            flattened.save(output, "JPEG", quality=90, optimize=True)
-    elif target in ("png", "webp"):
+            if target == "jpg":
+                flattened.save(output, "JPEG", quality=90, optimize=True, **metadata)
+            else:
+                flattened.save(output, "BMP")
+    elif target == "gif":
+        # GIF has 1-bit alpha. Reserve index 255 for fully transparent pixels;
+        # quantize opaque colors separately so palette optimization cannot turn
+        # an opaque black pixel into the transparent entry.
+        with image.convert("RGBA") as rgba, Image.new("RGB", rgba.size, background) as flattened, rgba.getchannel("A") as alpha:
+            flattened.paste(rgba, mask=alpha)
+            with flattened.quantize(colors=255, method=Image.Quantize.MEDIANCUT) as palette:
+                if alpha.getextrema()[0] == 0:
+                    with alpha.point(lambda value: 255 if value == 0 else 0) as transparent:
+                        palette.paste(255, mask=transparent)
+                    palette.save(output, "GIF", transparency=255, optimize=False)
+                else:
+                    palette.save(output, "GIF", optimize=False)
+    elif target in ("png", "webp", "avif", "tiff", "ico", "tga", "jp2"):
         with image.convert("RGBA" if _image_has_transparency(image) else "RGB") as converted:
             if target == "webp":
-                converted.save(output, "WEBP", lossless=True, exact=True)
+                converted.save(output, "WEBP", lossless=True, exact=True, **metadata)
+            elif target == "png":
+                converted.save(output, "PNG", optimize=True, **metadata)
+            elif target == "avif":
+                converted.save(output, "AVIF", quality=90, subsampling="4:4:4", speed=6, **metadata)
+            elif target == "tiff":
+                converted.save(output, "TIFF", compression="tiff_deflate", **metadata)
+            elif target == "ico":
+                if converted.width != converted.height or not 1 <= converted.width <= 256:
+                    raise DownloadError("ICO output requires a square image up to 256 pixels. The source size was kept.")
+                converted.save(output, "ICO", sizes=[converted.size])
+            elif target == "tga":
+                converted.save(output, "TGA", compression="tga_rle")
             else:
-                converted.save(output, "PNG", optimize=True)
+                converted.save(output, "JPEG2000", irreversible=False, **metadata)
     else:
         raise DownloadError("Unsupported still-image conversion target.")
 
