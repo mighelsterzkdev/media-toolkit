@@ -43,7 +43,7 @@ export function SettingsDialog({ state, disabled, busy, onSave, onClearResume }:
     <DialogTrigger asChild><Button variant="ghost" size="icon" aria-label="Settings" title="Settings" disabled={disabled}><Settings2 className="size-[18px]" /></Button></DialogTrigger>
     <DialogContent className="settings-dialog" onEscapeKeyDown={event => { if (saving) event.preventDefault() }} onPointerDownOutside={event => { if (saving) event.preventDefault() }}>
       <DialogHeader><DialogTitle>Settings</DialogTitle><DialogDescription>Your limits are remembered on this computer.</DialogDescription></DialogHeader>
-      <form onSubmit={save} className="space-y-5">
+      <form onSubmit={save} className="space-y-4">
         <div className="settings-limits">
           <div className="space-y-2"><Label htmlFor="settings-height">Max video height</Label><div className="unit-input"><Input id="settings-height" type="number" min="1" step="1" placeholder="Unlimited" value={height} onChange={event => setHeight(event.target.value)} disabled={saving} /><span>px</span></div></div>
           <div className="space-y-2"><Label htmlFor="settings-size">Max file size</Label><div className="unit-input"><Input id="settings-size" type="number" min="0.000001" step="any" placeholder="Unlimited" value={size} onChange={event => setSize(event.target.value)} disabled={saving} /><span>MiB</span></div></div>

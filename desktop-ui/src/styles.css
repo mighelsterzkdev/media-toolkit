@@ -73,15 +73,16 @@
   .folder-destination p { @apply truncate text-sm text-foreground; }
   .folder-destination > button { @apply h-10 shrink-0 gap-2 px-4 text-sm; }
   .download-button { @apply h-11 min-w-36 text-sm font-medium; }
-  .downloads-section { @apply flex min-h-44 flex-1 flex-col border-t px-6 pb-4 pt-3; }
+  .downloads-section { @apply flex min-h-44 flex-1 flex-col border-t px-6 py-4; }
   .downloads-section > .section-heading { @apply mb-2 shrink-0; }
   .downloads-section > .section-heading button { @apply text-sm text-muted-foreground; }
   .count-badge { @apply rounded-md bg-secondary px-2 text-sm leading-6 text-secondary-foreground; }
   .empty-downloads { @apply flex min-h-0 flex-1 flex-col items-center justify-center gap-3 overflow-y-auto p-4 text-center text-muted-foreground; }
   .empty-downloads p { @apply text-base text-foreground; }
   .empty-downloads span { @apply text-sm; }
-  .task-list { @apply min-h-0 flex-initial overflow-y-auto rounded-md border; scrollbar-gutter: stable; }
-  .task-row { @apply flex min-h-20 items-start gap-4 border-b p-4 last:border-b-0; }
+  .task-list { @apply min-h-0 flex-initial; }
+  .task-list, .conversion-files { @apply overflow-y-auto rounded-md border; }
+  .task-row, .conversion-file { @apply flex min-h-20 items-center gap-4 border-b p-4 last:border-b-0; }
   .task-icon { @apply flex size-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground; }
   .task-icon-done { @apply text-emerald-400; }
   .task-icon-failed { @apply text-red-300; }
@@ -93,7 +94,7 @@
   .task-content [role='progressbar'] > div { @apply bg-primary; }
   .task-error { @apply mt-2 break-words text-sm leading-6 text-red-300; }
   .task-operation { @apply mt-1 text-sm leading-6 text-muted-foreground; }
-  .task-actions { @apply flex shrink-0 items-center; }
+  .task-actions { @apply flex shrink-0 items-center gap-2; }
   .task-actions button { @apply size-10 text-muted-foreground; }
   .task-actions button svg { @apply size-4; }
   .app-footer { @apply flex shrink-0 justify-between gap-4 border-t px-6 py-2 text-sm text-muted-foreground; }
@@ -119,18 +120,18 @@
   .conversion-empty p { @apply text-base text-foreground; }
   .conversion-empty span { @apply text-sm; }
   .conversion-selection { @apply mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm text-muted-foreground; }
-  .conversion-selection > div { @apply flex items-center; }
-  .conversion-files { @apply mb-4 max-h-64 overflow-y-auto rounded-md border; scrollbar-gutter: stable; }
-  .conversion-file { @apply flex min-h-20 items-center gap-3 border-b px-4 py-3 last:border-b-0; }
+  .conversion-selection > div { @apply flex items-center gap-2; }
+  .conversion-files { @apply mb-4 max-h-64; }
   .conversion-file > button { @apply shrink-0 text-muted-foreground; }
   .conversion-file-copy { @apply min-w-0 flex-1; }
   .conversion-file-copy > p { @apply truncate text-base font-medium; }
   .conversion-file-copy > span { @apply block text-sm leading-6 text-muted-foreground; }
   .conversion-file-copy > .inline-error { @apply text-red-300; }
   .file-checkbox { @apply size-4 shrink-0 cursor-pointer rounded disabled:cursor-not-allowed disabled:opacity-50; accent-color: hsl(var(--primary)); }
-  .conversion-options { @apply space-y-3 pb-4; }
+  .conversion-options { @apply space-y-2 pb-4; }
   .conversion-options > .kind-options { @apply mb-0; }
   .download-target-field, .conversion-target-field { @apply flex flex-wrap items-center gap-x-4 gap-y-2; }
+  .download-target-field > label, .conversion-target-field > label { @apply w-20 shrink-0; }
   .download-target-field > button, .conversion-target-field > button { @apply w-72 max-w-full; }
   .conversion-format-count { @apply text-sm text-muted-foreground; }
   .conversion-file-copy > .conversion-file-skip { @apply text-amber-300; }
@@ -152,10 +153,9 @@
   .folder-destination { flex-basis: 100%; }
   .download-button { width: 100%; }
   .task-eta { margin-left: 0; }
-  .task-row { gap: 8px; padding: 16px 8px; }
+  .task-row, .conversion-file { gap: 8px; }
   .settings-limits { grid-template-columns: 1fr; }
   .app-header-main { column-gap: 16px; }
-  .conversion-file { padding-left: 12px; padding-right: 8px; gap: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
