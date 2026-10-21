@@ -314,7 +314,8 @@ def _download_original(url, kind, output_dir, inspected, progress_hook, logger, 
         options.update(buffersize=min(65_536, max_size + 1), noresizebuffer=True)
     if image_file:
         options.update(skip_download=True, ignore_no_formats_error=True)
-    elif inspected.animation_video:
+    elif inspected.animation_video or (getattr(request, "desktop_conversion", False)
+                                      and getattr(request, "convert_to", None) in ("gif", "webp", "apng")):
         options["format"] = "bestvideo/best"
     else:
         options["format"] = "bestaudio/best" if kind == "audio" else "bestvideo+bestaudio/best/bestvideo"
@@ -326,7 +327,7 @@ def _download_original(url, kind, output_dir, inspected, progress_hook, logger, 
                     downloader, options["format"], "video" if inspected.animation_video else kind,
                     inspected.information, max_height=max_height, max_size=max_size,
                     allow_resize=bool(getattr(request, "convert_to", None)) and
-                    (not getattr(request, "desktop_conversion", False) or request.convert_to in ("mp4", "gif")),
+                    (not getattr(request, "desktop_conversion", False) or request.convert_to in ("mp4", "gif", "webp", "apng")),
                 )
             for cookie in inspected.cookies:
                 downloader.cookiejar.set_cookie(deepcopy(cookie))

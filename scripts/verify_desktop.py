@@ -83,7 +83,10 @@ def verify_download_formats(service, sources, video, ffprobe):
              ("Animation.gif", "image", "webp", "WEBP", None), ("Animation.webp", "image", "gif", "GIF", 32)]
     if video is not None:
         cases += [("Clip.mp4", "video", "mkv", None, None), ("Clip.mp4", "audio", "flac", None, None),
-                  ("Animation.webp", "image", "mp4", None, 32)]
+                  ("Animation.webp", "image", "mp4", None, 32),
+                  ("Clip.mp4", "video", "gif", "GIF", 16),
+                  ("Clip.mp4", "video", "webp", "WEBP", 16),
+                  ("Clip.mp4", "video", "apng", "PNG", 16)]
     try:
         for filename, kind, target, expected, max_height in cases:
             service.save_settings({"max_height": max_height})
@@ -97,7 +100,7 @@ def verify_download_formats(service, sources, video, ffprobe):
             options = next(item["options"] for item in asset["kinds"] if item["id"] == kind)
             if max_height is None:
                 assert options[0]["id"] == "original" and options[0]["recommended"], options
-            else:
+            elif filename != "Clip.mp4":
                 assert all(option["id"] != "original" for option in options), options
             assert target in {option["id"] for option in options}, (filename, target, options)
             service.enqueue(inspected["id"], asset["id"], kind, target)
@@ -111,6 +114,14 @@ def verify_download_formats(service, sources, video, ffprobe):
                     assert image.format == expected, (target, image.format)
                     if filename in ("Animation.gif", "Animation.webp"):
                         assert image.n_frames == 2, (target, image.n_frames)
+                    if filename == "Clip.mp4":
+                        assert image.n_frames == 3 and image.info.get("loop") == 0, (target, image.n_frames)
+                        timing = []
+                        for index in range(image.n_frames):
+                            image.seek(index)
+                            image.load()
+                            timing.append(image.info["duration"])
+                        assert abs(sum(timing) - 300) < 15, (target, timing)
                     if max_height is not None:
                         assert image.height <= max_height
             else:
@@ -276,7 +287,7 @@ def verify(executable: Path | None = None):
                 service.add_conversion_files([str(video)])
                 state = wait_for(service, lambda value: value["conversion"]["status"] != "checking")
                 selected_video = state["conversion"]["files"][0]
-                assert selected_video["error"] is None and {"mp3", "webm"}.issubset(selected_video["targets"]), selected_video
+                assert selected_video["error"] is None and {"mp3", "webm", "gif", "webp", "apng"}.issubset(selected_video["targets"]), selected_video
                 api._tools["status"] = "ready"
                 for target in ("mp3", "webm", "mkv"):
                     require(api.enqueue_conversions([selected_video["id"]], target))
@@ -299,6 +310,20 @@ def verify(executable: Path | None = None):
                                 hashes.setdefault(packet["stream_index"], []).append(packet["data_hash"])
                             return hashes
                         assert packets(video) == packets(task["path"]), "Compatible streams were unexpectedly re-encoded"
+                for target, expected in (("gif", "GIF"), ("webp", "WEBP"), ("apng", "PNG")):
+                    require(api.enqueue_conversions([selected_video["id"]], target))
+                    state = wait_for(service, lambda value: value["tasks"][-1]["status"] in ("completed", "failed"))
+                    task = state["tasks"][-1]
+                    assert task["status"] == "completed", task
+                    with Image.open(task["path"]) as image:
+                        assert image.format == expected and image.n_frames == 3 and image.size == (32, 32), task
+                        assert image.info.get("loop") == 0, task
+                        duration = 0
+                        for index in range(image.n_frames):
+                            image.seek(index)
+                            image.load()
+                            duration += image.info["duration"]
+                        assert abs(duration - 300) < 15, (target, duration)
             # The recorded-file shortcut replaces the previous selection and
             # uses its native format to offer the next compatible conversion.
             require(api.prepare_conversion(state["tasks"][0]["id"]))

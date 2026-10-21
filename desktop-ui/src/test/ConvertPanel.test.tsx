@@ -73,4 +73,24 @@ describe('conversion defaults and explicit choices', () => {
     expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('WebP')
     expect(screen.getByRole('button', { name: 'Convert' })).toBeEnabled()
   })
+
+  it.each(['GIF', 'WebP', 'APNG'])('offers %s animation for a silent MP4 and submits the explicit selection', async target => {
+    const user = userEvent.setup()
+    const file: LocalFile = { ...video, format: 'mp4', name: 'Silent.mp4', has_audio: false,
+      targets: ['mov', 'mkv', 'webm', 'gif', 'webp', 'apng'],
+      target_notes: { gif: 'Loops without audio.', webp: 'Lossless animation without audio.', apng: 'Animated PNG without audio.' } }
+    const callbacks = props([file])
+    const view = render(<ConvertPanel {...callbacks} />)
+    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('MKV')
+    await user.click(screen.getByRole('combobox', { name: 'Convert to' }))
+    expect(screen.getAllByRole('option', { name: new RegExp(`^${target}\\b`) })).toHaveLength(1)
+    expect(screen.getByText('Animation')).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /^MP3\b/ })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('option', { name: new RegExp(`^${target}\\b`) }))
+    view.rerender(<ConvertPanel {...callbacks} conversion={{ ...callbacks.conversion, files: structuredClone([file]) }} />)
+    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent(target)
+    expect(screen.getByText(new RegExp(`1 of 1 selected file can convert to ${target}`))).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Convert' }))
+    expect(callbacks.onConvert).toHaveBeenCalledWith(['video'], target.toLowerCase(), '#FFFFFF')
+  })
 })

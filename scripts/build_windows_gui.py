@@ -117,6 +117,7 @@ def build(output: Path) -> Path:
         "Images: PNG, JPG, WebP, AVIF, BMP, TIFF, ICO, TGA, GIF, JP2. HEIC/HEIF input is supported.\n"
         "Audio: MP3, WAV, FLAC, M4A, AAC, Opus, Ogg, AIFF. Video: MP4, MKV, MOV, WebM.\n"
         "Animations: GIF, animated WebP, APNG, MP4. Original files are preserved.\n"
+        "Videos can also become looping GIF, animated WebP or APNG without audio.\n"
         "Images work offline. Audio/video conversion and MP4 animation output need FFmpeg/ffprobe.\n"
         "Conversions show measured progress when available; compatible streams are copied without re-encoding.\n"
         "The queue is saved locally. After reopening, use Retry to continue unfinished tasks. Nothing restarts automatically.\n"

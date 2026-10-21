@@ -78,7 +78,7 @@ class DesktopQueueStoreTests(unittest.TestCase):
         targets = {
             "image": ("png", "jpg", "webp", "avif", "bmp", "tiff", "ico", "tga", "gif", "jp2", "apng", "mp4", "mkv", "mov", "webm"),
             "audio": ("mp3", "wav", "flac", "m4a", "aac", "opus", "ogg", "aiff"),
-            "video": ("mp4", "mkv", "mov", "webm"),
+            "video": ("mp4", "mkv", "mov", "webm", "gif", "webp", "apng"),
         }
         tasks = []
         for kind, formats in targets.items():

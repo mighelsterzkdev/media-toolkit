@@ -155,6 +155,17 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(repeated.path, converted.path)
         self.assertEqual(original.path.read_bytes(), inspected.image_data)
 
+    def test_desktop_video_animations_do_not_reuse_the_legacy_gif_profile(self):
+        inspected = MediaInspection("https://x.com/example/status/123", {"id": "123", "extractor_key": "Twitter", "ext": "mp4"},
+                                    ("image",), animated=True, animation_video=True)
+        legacy = DownloadRequest(inspected.url, "image", self.output, "gif")
+        desktop = DownloadRequest(inspected.url, "image", self.output, "gif", desktop_conversion=True)
+        self.assertNotEqual(media_identity(legacy, inspected, "image", "gif").key,
+                            media_identity(desktop, inspected, "image", "gif").key)
+        # Source/original reuse remains independent of conversion profiles.
+        self.assertEqual(media_identity(legacy, inspected, "image", None).key,
+                         media_identity(desktop, inspected, "image", None).key)
+
     def test_resolved_page_identity_is_shared_with_a_google_wrapper(self):
         direct = self.inspected()
         wrapper = self.inspected("https://www.google.com/imgres?imgurl=anything", page_url=direct.url)

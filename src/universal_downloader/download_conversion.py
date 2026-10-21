@@ -53,13 +53,14 @@ def convert_downloaded_file(source, target, destination, *, inspected, kind, max
     expected = "animation" if kind == "image" and inspected.animated and not inspected.animation_video else "video" if inspected.animation_video else kind
     if checked["media_type"] != expected:
         raise DownloadError("The downloaded file does not match the checked media type. Check the link again.")
-    # Preserve the established social-video GIF output and explicit resizing.
+    # Keep explicit MP4 resizing; video animations use the shared streaming
+    # encoder, including social GIFs whose original source is an MP4.
     # An animation that already fits must stay on its frame-preserving path.
     height = checked.get("height")
     resize = max_height is not None and (height is None or height > max_height
              or target == "mp4" and height + height % 2 > max_height)
     resize_animation = resize and checked["media_type"] == "animation" and target in ("gif", "mp4")
-    legacy = inspected.animation_video and target == "gif" or resize and checked["media_type"] == "video" and target == "mp4"
+    legacy = resize and checked["media_type"] == "video" and target == "mp4"
     if legacy:
         return convert_file(source, target, destination, max_height=max_height, max_size=max_size, logger=logger)
     if target not in checked["targets"] and not resize_animation:
@@ -74,7 +75,8 @@ def convert_downloaded_file(source, target, destination, *, inspected, kind, max
         if resize_animation:
             checked = _resized_animation(checked, target, max_height, directory)
         converted = local_media.convert_local_file(checked, target, directory,
-                                                   background="#FFFFFF", progress_hook=progress_hook)
+                                                   background="#FFFFFF", progress_hook=progress_hook,
+                                                   max_height=max_height if target in local_media._ANIMATION else None)
         validate_file_limits(converted, max_size=max_size, max_height=max_height,
                              ffmpeg=local_media._tools()[0].parent if max_height is not None and target in local_media._VIDEO else None)
         return publish_file(converted, destination)

@@ -61,10 +61,14 @@ class DesktopDownloadFormatTests(unittest.TestCase):
             audio = available_download_conversions(inspected, "audio")
             self.assertEqual(set(audio), {"mp3", "wav", "flac", "m4a", "aac", "opus", "ogg", "aiff"})
             pseudo = replace(inspected, kinds=("image",), animated=True, animation_video=True)
-            with patch("universal_downloader.desktop_download_formats.available_conversions", return_value=("gif", "mp4")):
-                options = available_download_conversions(pseudo, "image")
-            self.assertEqual(set(options), {"mp4", "mkv", "webm", "gif"})
-            self.assertFalse({"jpg", "png", "apng", "webp"} & options.keys())
+            options = available_download_conversions(pseudo, "image")
+            self.assertEqual(set(options), {"mp4", "mkv", "webm"})
+            self.assertFalse({"jpg", "png", "gif", "apng", "webp"} & options.keys())
+            with patch("universal_downloader.local_media._capabilities", return_value=(encoders | {"gif", "libwebp", "apng"}, muxers | {"gif", "webp", "apng"})):
+                for source, kind in ((inspected, "video"), (pseudo, "image")):
+                    expanded = available_download_conversions(source, kind, max_height=480)
+                    self.assertTrue({"gif", "webp", "apng"}.issubset(expanded))
+                    self.assertIn("without audio", expanded["gif"])
 
     def test_missing_tools_hide_only_tool_dependent_outputs(self):
         with patch("universal_downloader.local_media._tools", side_effect=DownloadError("missing")):
@@ -92,6 +96,54 @@ class DownloadConversionPipelineTests(unittest.TestCase):
         environment = patch.dict(os.environ, {"UNIDOWN_DATA_DIR": str(self.root / "state")})
         environment.start()
         self.addCleanup(environment.stop)
+
+    def test_video_and_social_animation_downloads_share_real_animation_encoders_resize_and_cache(self):
+        tools = find_ffmpeg()
+        if tools is None:
+            self.skipTest("FFmpeg and ffprobe are not installed")
+        ffmpeg = tools / ("ffmpeg.exe" if (tools / "ffmpeg.exe").is_file() else "ffmpeg")
+        source = self.root / "video.mp4"
+        subprocess.run([str(ffmpeg), "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "lavfi", "-i",
+                        "testsrc=size=32x16:rate=10:duration=0.4", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        "-threads", "1", str(source)], check=True, capture_output=True, timeout=20, **hidden_process_options())
+        original = source.read_bytes()
+
+        def retrieve(url, kind, output_dir, *args, **kwargs):
+            path = output_dir / "source.mp4"
+            shutil.copyfile(source, path)
+            return DownloadResult("Example", path)
+
+        video = MediaInspection("https://example.com/video", {"id": "clip", "ext": "mp4", "height": 16,
+                                "vcodec": "h264", "acodec": "none", "duration": .4}, ("video",), heights=(16,))
+        social = replace(video, url="https://example.com/social", kinds=("image",), animated=True, animation_video=True)
+        with patch("universal_downloader.downloader._download_original", side_effect=retrieve) as retrieved:
+            for inspected, kind in ((video, "video"), (social, "image")):
+                for target, expected in (("gif", "GIF"), ("webp", "WEBP"), ("apng", "PNG")):
+                    with self.subTest(kind=kind, target=target):
+                        request = DownloadRequest(inspected.url, kind, self.root / "downloads", target,
+                                                  max_height=8, desktop_conversion=True)
+                        result = download(request, inspected=inspected)
+                        with Image.open(result.path) as image:
+                            self.assertEqual(image.format, expected)
+                            self.assertEqual(image.size, (16, 8))
+                            self.assertEqual(image.n_frames, 4)
+                            self.assertEqual(image.info.get("loop"), 0)
+                            duration = 0
+                            for index in range(image.n_frames):
+                                image.seek(index)
+                                image.load()
+                                duration += image.info["duration"]
+                            self.assertAlmostEqual(duration, 400, delta=10)
+                        cached = download(request, inspected=inspected)
+                        self.assertTrue(cached.already_exists)
+                        self.assertEqual(cached.path, result.path)
+            self.assertEqual(retrieved.call_count, 6)
+        self.assertEqual(source.read_bytes(), original)
+        failed = self.root / "over-budget.gif"
+        with self.assertRaisesRegex(DownloadError, "exceeds"):
+            convert_downloaded_file(source, "gif", failed, inspected=video, kind="video", max_size=1)
+        self.assertFalse(failed.exists())
+        self.assertFalse(list(self.root.rglob(".desktop-convert-*")))
 
     def test_desktop_download_produces_actual_new_formats_and_reuses_completed_cache(self):
         inspected = picture()

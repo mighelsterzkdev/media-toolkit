@@ -8,12 +8,11 @@ import math
 from PIL import Image
 
 from . import local_conversion, local_media
-from .conversions import available_conversions
 from .errors import DownloadError
 from .local_animation import ANIMATION_FORMATS, MAX_ANIMATION_FRAMES, MAX_ANIMATION_PIXELS, animation_targets
 
 DOWNLOAD_TARGETS_BY_KIND = {
-    "video": frozenset(local_media._VIDEO),
+    "video": frozenset((*local_media._VIDEO, *local_media._ANIMATION)),
     "audio": frozenset(local_media._AUDIO),
     # Providers such as X expose an MP4 animation as an image-kind asset.
     "image": frozenset((*local_conversion._ENCODERS, "apng", *local_media._VIDEO)),
@@ -67,6 +66,11 @@ def _av_options(inspected, kind, max_height):
         options[target] = "Compatible streams are copied without re-encoding. When encoding is needed: " + local_media._NOTES[target]
         if target == "mp4" and max_height is not None:
             options[target] += " Resizes to the maximum video height when needed."
+    for target, (encoder, muxer) in local_media._ANIMATION.items():
+        if encoder in encoders and muxer in muxers:
+            options[target] = local_media._ANIMATION_NOTES[target]
+            if max_height is not None:
+                options[target] += " Resizes to the maximum video height when needed."
     return options
 
 
@@ -76,10 +80,7 @@ def available_download_conversions(inspected, kind, *, max_height=None):
     if kind in ("video", "audio"):
         return _av_options(inspected, kind, max_height)
     if inspected.animation_video:
-        options = _av_options(inspected, kind, max_height)
-        if "gif" in available_conversions(inspected, kind, max_height=max_height):
-            options["gif"] = "Animated GIF, up to 30 seconds. Uses up to 256 colors and 15 frames per second."
-        return options
+        return _av_options(inspected, kind, max_height)
     if not inspected.image_data:
         return {}
     try:

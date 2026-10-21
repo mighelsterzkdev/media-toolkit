@@ -135,7 +135,7 @@ def _asset_options(inspected, settings):
             except DownloadError:
                 continue
             category = ("audio" if target in audio else "video" if target in video else
-                        "animation" if inspected.animated and target in ("gif", "webp", "apng") else "image")
+                        "animation" if (inspected.animated or kind == "video") and target in ("gif", "webp", "apng") else "image")
             label = f"{names.get(target, target.upper())} {category}"
             options.append({"id": target, "label": label, "description": description, "recommended": False})
         if options:

@@ -75,6 +75,11 @@ def media_identity(request, inspected, kind: str, target: str | None) -> Downloa
         "asset": asset, "role": role, "target": target or "original",
         "max_height": height, "max_size": getattr(request, "max_size", None),
     }
+    if (getattr(request, "desktop_conversion", False) and target in ("gif", "webp", "apng")
+            and (kind == "video" or inspected.animation_video)):
+        # The desktop encoder now keeps video dimensions and timing. A GIF
+        # from the older 15-fps/720px profile is not this conversion's cache.
+        descriptor["conversion_profile"] = "video-animation-v1"
     key = sha256(json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return DownloadIdentity(key, source, media_id, role, target, height)
 

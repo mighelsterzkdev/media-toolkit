@@ -54,6 +54,16 @@ class DesktopDescriptionTests(unittest.TestCase):
         self.assertIn("transparency", jpeg["description"].lower())
         self.assertNotIn("selected background", jpeg["description"].lower())
 
+    def test_video_animation_options_are_labeled_as_animation(self):
+        inspected = MediaInspection("https://example.com/video", {"ext": "mp4"}, ("video",))
+        with patch("universal_downloader.desktop_service.available_download_conversions", return_value={
+                "gif": "Loops without audio.", "webp": "Lossless animation.", "apng": "Animated PNG."}):
+            options = _asset_options(inspected, {"max_height": None, "max_size": None})[0]["options"]
+        labels = {option["id"]: option["label"] for option in options}
+        self.assertEqual(labels["gif"], "GIF animation")
+        self.assertEqual(labels["webp"], "WebP animation")
+        self.assertEqual(labels["apng"], "APNG animation")
+
 
 class _Handler(BaseHTTPRequestHandler):
     bodies = {}
@@ -267,7 +277,8 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertTrue({"mp3", "wav", "flac", "m4a", "aac", "opus", "ogg", "aiff"}.issubset(audio))
         self.assertTrue({"mkv", "mov", "webm"}.issubset(video))
         self.assertFalse(set(audio) & {"png", "gif", "mkv"})
-        self.assertFalse(set(video) & {"flac", "png", "gif"})
+        self.assertTrue({"gif", "webp", "apng"}.issubset(video))
+        self.assertFalse(set(video) & {"flac", "png"})
         self.assertEqual(audio["flac"]["label"], "FLAC audio")
         self.assertEqual(video["mkv"]["label"], "MKV video")
         with self.service._lock:

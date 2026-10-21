@@ -18,7 +18,7 @@ const outputGroups = [
   { label: 'Images', formats: ['png', 'jpg', 'webp', 'avif', 'bmp', 'tiff', 'ico', 'tga', 'gif', 'jp2'] },
   { label: 'Audio', formats: ['mp3', 'wav', 'flac', 'm4a', 'aac', 'opus', 'ogg', 'aiff'] },
   { label: 'Video', formats: ['mp4', 'mkv', 'mov', 'webm'] },
-  { label: 'Animation', formats: ['apng'] },
+  { label: 'Animation', formats: ['gif', 'webp', 'apng'] },
 ]
 const knownFormats = new Set(outputGroups.flatMap(group => group.formats))
 const ffmpegFormats = new Set(['mp3', 'wav', 'flac', 'm4a', 'aac', 'opus', 'ogg', 'aiff', 'mp4', 'mkv', 'mov', 'webm'])
@@ -81,8 +81,13 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
   const selected = validFiles.filter(file => !excluded.has(file.id))
   const selectionKey = JSON.stringify(selected.map(file => [file.id, mediaType(file), file.format]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))
   const availableTargets = new Set(selected.flatMap(file => file.targets))
+  const animationTargets = new Set(selected
+    .filter(file => ['video', 'animation'].includes(mediaType(file)))
+    .flatMap(file => file.targets.filter(format => ['gif', 'webp', 'apng'].includes(format))))
   const groups = [...outputGroups, { label: 'Other', formats: [...availableTargets].filter(format => !knownFormats.has(format)) }]
-    .map(group => ({ ...group, formats: group.formats.filter(format => availableTargets.has(format)) }))
+    .map(group => ({ ...group, formats: group.formats.filter(format => availableTargets.has(format)
+      && (group.label === 'Images' ? !animationTargets.has(format)
+        : group.label === 'Animation' ? format === 'apng' || animationTargets.has(format) : true)) }))
     .filter(group => group.formats.length > 0)
   const targets = groups.flatMap(group => group.formats)
   const target = preference?.selection === selectionKey && targets.includes(preference.target) ? preference.target : defaultTarget(selected, targets, ffmpegReady)

@@ -43,7 +43,7 @@ The desktop app is tested on Windows x64 and requires the [Microsoft Edge WebVie
 
 The Download **Save as** dropdown uses the same image, audio and video encoders as Convert. It lists compatible formats for the selected media type, including AVIF, WebP, TIFF and JPEG 2000 images, FLAC, WAV and Opus audio, and MKV, MOV and WebM video. **Original** stays recommended. Native copies and unsupported encoders are omitted; ICO requires a square image up to 256 pixels. Conversion checks the downloaded bytes before publishing a completed result. Static-image downloads use white when flattening transparency; Convert also lets you choose black.
 
-Animated GIF, WebP and APNG sources retain their frames in compatible animation outputs. When a height limit requires resizing, GIF and MP4 outputs remain available. Social GIFs delivered as MP4 offer supported video containers and the existing short GIF conversion; still-image formats are not offered for those animations. The terminal retains its existing conversion choices, documented below.
+Animated GIF, WebP and APNG sources retain their frames in compatible animation outputs. When a height limit requires resizing those sources, GIF and MP4 outputs remain available. Videos, including social GIFs delivered as MP4, also offer GIF, animated WebP and APNG through the shared conversion engine. These video-to-animation outputs can resize to the selected height limit. Still-image formats are not offered for moving sources. The terminal retains its existing conversion choices, documented below.
 
 ## Convert local files
 
@@ -53,7 +53,7 @@ Open **Convert** and click **Add files** to choose up to 100 local media files. 
 | --- | --- |
 | Still images | PNG, JPG, WebP, AVIF, BMP, TIFF, ICO, TGA, GIF, JPEG 2000 (JP2) |
 | Audio, including audio extracted from video | MP3, WAV, FLAC, M4A, AAC, Opus, Ogg Vorbis, AIFF |
-| Video | MP4, MKV, MOV, WebM |
+| Video | MP4, MKV, MOV, WebM; GIF, animated WebP and APNG without audio |
 | Animation | GIF, animated WebP, APNG, MP4 |
 
 Image inputs include JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF, GIF, ICO, TGA, JPEG 2000, PCX, PNM, DDS, flat PSD, QOI, SGI and XBM when readable by the bundled decoders. Audio/video inputs include common MP3, WAV, FLAC, M4A, AAC, Ogg, Opus, AIFF, MP4, MKV, MOV, WebM, AVI, MPEG, WMV and FLV files. Actual codec support matters more than the filename extension; unreadable files report their own error.
@@ -67,6 +67,7 @@ Image inputs include JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF, GIF, ICO, TGA,
 - The shared queue supports cancellation, retry and opening completed output folders. Switching tabs preserves selections and running operations.
 - Initial format selection stays within the source category: a video starts with a video output, while audio extraction remains an explicit choice. Selected formats stay stable while inspecting the same selection.
 - Audio/video conversions show measured progress and an estimated remaining time when available. Source preparation and operations with no trustworthy duration remain indeterminate.
+- Video-to-animation is an explicit choice in the **Animation** group. It keeps the video dimensions and plays in a loop without audio. GIF uses a palette of up to 256 colors per frame with 1-bit transparency and 10 ms timing; WebP and APNG use lossless frame encoding. There is no desktop 30-second GIF cutoff or automatic frame-rate reduction. Long clips can produce large files; conversion can be cancelled from the queue.
 
 MP4/MKV/MOV use compatible H.264 video and AAC audio; WebM uses VP9 and Opus. Compatible encoded streams are copied when possible, avoiding unnecessary quality loss and processing; incompatible streams are encoded with the existing profiles. The output notes describe which streams are copied or encoded. Video conversions keep the first video and first audio stream. Audio extraction uses the first audio stream, and silent video does not offer audio targets. Local conversion does not preserve every source metadata field; use the downloader's **Original** option when an unchanged available source is wanted.
 
@@ -81,7 +82,7 @@ Downloads go into the extracted folder's `downloads` directory when launched thr
 
 ```powershell
 # Check the ZIP against the published checksum before extraction
-Get-FileHash .\media-toolkit-0.11.0-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\media-toolkit-0.11.1-windows-x64.zip -Algorithm SHA256
 
 # Prepare the external tools without opening the menu
 .\unidown.exe --install-tools
@@ -280,10 +281,10 @@ Run on Windows x64 using a separate build environment:
 
 ```powershell
 python -B -m venv .tools/build-env
-.\.tools\build-env\Scripts\python.exe -B -m pip install -c constraints.txt -e . pyinstaller==6.22.3
-.\.tools\build-env\Scripts\python.exe -B scripts/build_windows_gui.py --output dist/release-0.10.0
-.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/release-0.10.0/media-toolkit-0.10.0-windows-x64/unidown.exe --bootstrap
-.\.tools\build-env\Scripts\python.exe -B scripts/verify_desktop.py dist/release-0.10.0/media-toolkit-0.10.0-windows-x64/media-toolkit.exe
+.\.tools\build-env\Scripts\python.exe -B -m pip install -c constraints.txt -e ".[desktop]" pyinstaller==6.22.3
+.\.tools\build-env\Scripts\python.exe -B scripts/build_windows_gui.py --output dist
+.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/media-toolkit-0.11.1-windows-x64/unidown.exe --bootstrap
+.\.tools\build-env\Scripts\python.exe -B scripts/verify_desktop.py dist/media-toolkit-0.11.1-windows-x64/media-toolkit.exe
 ```
 
 Use a new output directory for each build. The desktop build produces both executables, their separate library folders, a complete ZIP, and `SHA256SUMS.txt`. `scripts/build_windows.py` remains available for a terminal-only ZIP. The committed frontend assets and notices are included without installing Node.js on the build machine. It checks the executable archive to exclude optional Mutagen and build-time PyInstaller modules. The verifier removes Python and external tools from PATH, checks the bundled executable, preserves local image/video originals, converts GIF animation to H.264 MP4, extracts original AAC audio, converts MP3, verifies cached reuse, runs a link queue, checks remembered preferences, and terminates/restarts a real frozen HTTP download to verify continuation. Its temporary download history is isolated from the user's history. The **Build portable Windows release** workflow builds and checks the same artifacts on tagged versions or manual runs; it does not publish a release automatically.

@@ -234,7 +234,7 @@ class LocalMediaTests(unittest.TestCase):
         self.assertEqual(checked["media_type"], "video")
         self.assertEqual(checked["format"], "mkv")
         self.assertIn("other tracks", checked["target_notes"]["mp4"])
-        self.assertEqual(set(checked["targets"]), {"mp4", "mov", "webm", "mp3", "wav", "flac", "m4a", "aac", "opus", "ogg", "aiff"})
+        self.assertEqual(set(checked["targets"]), {"mp4", "mov", "webm", "gif", "webp", "apng", "mp3", "wav", "flac", "m4a", "aac", "opus", "ogg", "aiff"})
         for target in ("mp4", "mov", "webm", "mp3"):
             with self.subTest(target=target):
                 output = convert_local_file(checked, target, self.output)
@@ -255,7 +255,7 @@ class LocalMediaTests(unittest.TestCase):
         source = self.video(audio=False, native="mp4", codec="mpeg4")
         checked = self.checked(source)
         self.assertFalse(checked["has_audio"])
-        self.assertEqual(set(checked["targets"]), {"mp4", "mkv", "mov", "webm"})
+        self.assertEqual(set(checked["targets"]), {"mp4", "mkv", "mov", "webm", "gif", "webp", "apng"})
         normalized = convert_local_file(checked, "mp4", self.output)
         actual = self.checked(normalized)
         self.assertNotIn("mp4", actual["targets"])
@@ -317,6 +317,86 @@ class LocalMediaTests(unittest.TestCase):
         self.assertFalse(actual["has_audio"])
         self.assertAlmostEqual(actual["duration"], .3, delta=.04)
         self.assertEqual(int(self.probe(output)["streams"][0]["nb_frames"]), 2)
+        self.assert_clean()
+
+    def test_silent_mp4_offers_real_animation_outputs_and_keeps_motion_dimensions_and_duration(self):
+        source = self.root / "silent.mp4"
+        self.run_tool(["-f", "lavfi", "-i", "testsrc=size=482x470:rate=10:duration=3", "-c:v", "libx264",
+                       "-pix_fmt", "yuv420p", "-threads", "2", "-an", source])
+        original = source.read_bytes()
+        checked = self.checked(source)
+        self.assertTrue({"gif", "webp", "apng"}.issubset(checked["targets"]), checked)
+        self.assertFalse({"mp3", "wav", "flac"} & set(checked["targets"]))
+        for target, expected in (("gif", "GIF"), ("webp", "WEBP"), ("apng", "PNG")):
+            with self.subTest(target=target):
+                events = []
+                output = convert_local_file(checked, target, self.output, progress_hook=events.append)
+                with Image.open(output) as image:
+                    self.assertEqual(image.format, expected)
+                    self.assertEqual(image.size, (482, 470))
+                    self.assertEqual(image.n_frames, 30)
+                    self.assertEqual(image.info.get("loop"), 0)
+                    durations, frames = [], []
+                    for index in range(image.n_frames):
+                        image.seek(index)
+                        image.load()
+                        durations.append(image.info["duration"])
+                        frames.append(sha256(image.convert("RGB").tobytes()).hexdigest())
+                    self.assertAlmostEqual(sum(durations), 3000, delta=20)
+                    self.assertGreater(len(set(frames)), 1)
+                self.assertEqual(events[-1]["progress"], 99.9)
+                self.assertIn("without audio", checked["target_notes"][target])
+        self.assertEqual(source.read_bytes(), original)
+        self.assert_clean()
+
+    def test_video_to_animation_keeps_variable_frame_delays_and_converts_back_to_video(self):
+        source = convert_local_file(self.checked(self.animation()), "mp4", self.output)
+        checked = self.checked(source)
+        for target in ("gif", "webp", "apng"):
+            with self.subTest(target=target):
+                output = convert_local_file(checked, target, self.output)
+                with Image.open(output) as image:
+                    self.assertEqual(image.n_frames, 2)
+                    times = []
+                    for index in range(2):
+                        image.seek(index)
+                        image.load()
+                        times.append(image.info["duration"])
+                    self.assertAlmostEqual(times[0], 100, delta=1)
+                    self.assertAlmostEqual(times[1], 200, delta=1)
+                restored = convert_local_file(self.checked(output), "mp4", self.output)
+                metadata = self.probe(restored)
+                self.assertEqual(int(metadata["streams"][0]["nb_frames"]), 2)
+                self.assertAlmostEqual(float(metadata["format"]["duration"]), .3, delta=.03)
+
+    def test_video_animation_omits_audio_and_can_resize_without_clipping_the_video(self):
+        checked = self.checked(self.video())
+        for target in ("gif", "webp", "apng"):
+            output = convert_local_file(checked, target, self.output, max_height=13)
+            with Image.open(output) as image:
+                self.assertEqual(image.size, (17, 13))
+                self.assertEqual(image.n_frames, 4)
+            if target != "webp":  # FFmpeg does not decode every animated WebP variant.
+                self.assertTrue(all(stream["codec_type"] == "video" for stream in self.probe(output)["streams"]))
+
+    def test_video_animation_choices_follow_real_encoder_and_muxer_capabilities(self):
+        source = self.video(audio=False)
+        with patch("universal_downloader.local_media._capabilities", return_value=({"gif", "apng"}, {"gif", "webp"})):
+            self.assertEqual(self.checked(source)["targets"], ["gif"])
+
+    def test_cancelling_video_animation_encoding_keeps_sources_and_publishes_nothing(self):
+        source = self.video()
+        original = source.read_bytes()
+        checked = self.checked(source)
+
+        def cancel(event):
+            if event.get("progress") is not None and event["progress"] > 0:
+                raise DownloadError("Cancelled animation")
+
+        with self.assertRaisesRegex(DownloadError, "Cancelled animation"):
+            convert_local_file(checked, "gif", self.output, progress_hook=cancel)
+        self.assertEqual(list(self.output.iterdir()), [])
+        self.assertEqual(source.read_bytes(), original)
         self.assert_clean()
 
     def test_audio_copy_snapshot_change_cleanup_and_original_output_name_collision(self):
