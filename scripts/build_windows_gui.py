@@ -86,7 +86,7 @@ def build(output: Path) -> Path:
             "--hidden-import", "webview.platforms.edgechromium", "--hidden-import", "webview.platforms.winforms",
             "--add-data", f"{assets};universal_downloader/desktop_assets",
         ]
-        command += build_windows.heif_pyinstaller_options()
+        command += build_windows.heif_pyinstaller_options() + build_windows.ssl_pyinstaller_options()
         for module in ("yt_dlp.__pyinstaller", "PyInstaller", "mutagen", "webview.platforms.qt", "webview.platforms.gtk", "webview.platforms.cocoa", "webview.platforms.cef", "webview.platforms.android", "webview.platforms.mshtml", "PyQt5", "PyQt6", "PySide2", "PySide6", "tkinter"):
             command += ["--exclude-module", module]
         for package in (*build_windows.RUNTIME_PACKAGES, *DESKTOP_PACKAGES):

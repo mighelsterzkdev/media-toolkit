@@ -25,6 +25,16 @@ RUNTIME_PACKAGES = (
 )
 
 
+def ssl_pyinstaller_options() -> list[str]:
+    """Keep optional CA exclusions required by the build's Python runtime.
+
+    Some managed Python distributions load this resource in SSLContext's
+    constructor. Keep that policy intact when freezing their standard library.
+    """
+    exclusions = Path(ssl.__file__).with_name("codex-rejected-cas.pem")
+    return ["--add-data", f"{exclusions};."] if exclusions.is_file() else []
+
+
 def heif_pyinstaller_options() -> list[str]:
     """Collect the read-only HEIF wheel, including delvewheel's sibling DLLs."""
     distribution = metadata.distribution("pi-heif")
@@ -162,7 +172,7 @@ def build(output: Path) -> Path:
             "--exclude-module", "mutagen",
             "--collect-all", "yt_dlp_ejs", "--collect-all", "PIL",
         ]
-        command += heif_pyinstaller_options()
+        command += heif_pyinstaller_options() + ssl_pyinstaller_options()
         for package in RUNTIME_PACKAGES:
             command += ["--copy-metadata", package]
         command.append(str(ROOT / "scripts/portable_entry.py"))
