@@ -116,7 +116,7 @@
   .asset-option > span { @apply min-w-0; }
   .asset-option strong { @apply block truncate text-base font-medium; }
   .asset-option small { @apply block text-sm font-normal text-muted-foreground; }
-  .conversion-empty { @apply flex min-h-32 items-center gap-4 py-6 text-muted-foreground; }
+  .conversion-empty { @apply flex items-center gap-4 py-4 text-muted-foreground; }
   .conversion-empty p { @apply text-base text-foreground; }
   .conversion-empty span { @apply text-sm; }
   .conversion-selection { @apply mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm text-muted-foreground; }
