@@ -24,7 +24,7 @@ from .errors import DownloadError
 from .ffmpeg_progress import run as run_with_progress
 from .local_animation import ANIMATION_FORMATS, MAX_ANIMATION_FRAMES, MAX_ANIMATION_PIXELS, convert_animation, inspect_animation
 from .media_alpha import composite_filters, decoder_options, has_alpha
-from .media_geometry import analyze as analyze_geometry
+from .media_geometry import analyze as analyze_geometry, input_options as geometry_input_options
 
 # Only self-contained formats: never resolve playlists, concat scripts, DASH
 # manifests, image sequences or external URLs supplied by a local text file.
@@ -162,6 +162,25 @@ def _capabilities(ffmpeg):
     return _capabilities_cached(str(ffmpeg), recorded.st_size, recorded.st_mtime_ns)
 
 
+@lru_cache(maxsize=8)
+def _display_override_cached(executable, size, modified):
+    try:
+        result = subprocess.run([executable, "-hide_banner", "-h", "full"], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=15, check=True, **hidden_process_options())
+        return "-display_rotation" in result.stdout
+    except (OSError, subprocess.SubprocessError) as error:
+        raise DownloadError("The media tools could not start. Reinstall them and try again.") from error
+
+
+def _geometry_input_options(ffmpeg, stream, geometry):
+    options = geometry_input_options(stream, geometry)
+    if options:
+        recorded = ffmpeg.stat()
+        if not _display_override_cached(str(ffmpeg), recorded.st_size, recorded.st_mtime_ns):
+            raise DownloadError("These video display transforms require FFmpeg 6 or newer. Update the media tools and add the file again.")
+    return options
+
+
 def _can_mp4(location):
     try:
         ffmpeg, _ffprobe = _tools(location)
@@ -268,6 +287,8 @@ def _media_details(metadata, source, ffmpeg, *, max_height=None):
     encoders, muxers = _capabilities(ffmpeg)
     channels = int(audio[0].get("channels", 0)) if audio else 0
     geometry = analyze_geometry(video[0]) if video else None
+    if geometry:
+        _geometry_input_options(ffmpeg, video[0], geometry)
     transparent = bool(video and has_alpha(video[0]))
     if max_height is not None and (isinstance(max_height, bool) or not isinstance(max_height, int) or max_height < 1):
         raise DownloadError("Choose a positive maximum video height.")
@@ -570,6 +591,7 @@ def convert_local_file(media, target, output_dir, background="#FFFFFF", progress
             arguments = ["-protocol_whitelist", "file,pipe", "-format_whitelist", _INPUT_FORMATS]
             if target in _ANIMATION or target in _VIDEO and not plan["video_copy"]:
                 arguments += ["-noautorotate"]
+                arguments += _geometry_input_options(ffmpeg, _streams(metadata)[0][0], geometry)
                 arguments += decoder_options(_streams(metadata)[0][0])
             arguments += ["-i", str(snapshot), "-map_metadata", "-1", "-map_chapters", "-1"]
             if target in _AUDIO:

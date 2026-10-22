@@ -71,7 +71,7 @@ Image inputs include JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF, GIF, ICO, TGA,
 
 MP4/MKV/MOV use compatible H.264 video and AAC audio; WebM uses VP9 and Opus. Compatible encoded streams are copied when possible, avoiding unnecessary quality loss and processing; incompatible streams are encoded with the existing profiles. The output notes describe which streams are copied or encoded. Video conversions keep the first video and first audio stream. Audio extraction uses the first audio stream, and silent video does not offer audio targets. Local conversion does not preserve every source metadata field; use the downloader's **Original** option when an unchanged available source is wanted.
 
-Encoded video and animation use the displayed orientation and proportions, including rotation and non-square source pixels. Compatible stream copies keep their original display metadata. Variable frame timestamps are retained during video encoding instead of forcing a constant frame rate. See [conversion policy](docs/conversion-policy.md) for the rules shared by both desktop tabs.
+Encoded video and animation use the displayed orientation and proportions, including rotation and non-square source pixels. Checking video display transforms requires FFmpeg 6 or newer; the portable installer supplies the tested version. Compatible stream copies keep their original display metadata. Variable frame timestamps are retained during video encoding instead of forcing a constant frame rate. See [conversion policy](docs/conversion-policy.md) for the rules shared by both desktop tabs.
 
 ## Windows portable release
 

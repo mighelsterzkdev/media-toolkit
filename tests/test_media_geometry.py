@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw
 
 from universal_downloader.dependencies import find_ffmpeg, hidden_process_options
 from universal_downloader.errors import DownloadError
-from universal_downloader.media_geometry import analyze
+from universal_downloader.media_geometry import analyze, input_options
 
 
 def matrix(a, b, c, d, *, x=0, y=0, perspective=0):
@@ -20,6 +20,15 @@ def matrix(a, b, c, d, *, x=0, y=0, perspective=0):
 
 
 class GeometryTests(unittest.TestCase):
+    def test_input_override_is_limited_to_the_selected_stream_when_normalizing(self):
+        plain = {"index": 2, "width": 40, "height": 20}
+        self.assertEqual(input_options(plain, analyze(plain)), [])
+        transformed = {**plain, "tags": {"rotate": "90"}}
+        self.assertEqual(input_options(transformed, analyze(transformed)), ["-display_rotation:2", "0"])
+        for index in (None, True, -1, "2"):
+            with self.subTest(index=index), self.assertRaisesRegex(DownloadError, "invalid metadata"):
+                input_options({**transformed, "index": index}, analyze(transformed))
+
     def test_square_pixel_expansion_preserves_detail_before_rotating_anamorphic_video(self):
         landscape = analyze({"width": 40, "height": 20, "sample_aspect_ratio": "2:1"})
         portrait = analyze({"width": 40, "height": 20, "sample_aspect_ratio": "2:1",
@@ -131,6 +140,28 @@ class RealGeometryTests(unittest.TestCase):
                 self.run_tool(["-noautorotate", "-i", source, "-vf", geometry.filters(), "-frames:v", "1", explicit])
                 with Image.open(auto) as expected, Image.open(explicit) as actual:
                     self.assertEqual(actual.size, expected.size)
+                    self.assertEqual(actual.convert("RGB").tobytes(), expected.convert("RGB").tobytes())
+
+    def test_input_override_prevents_encoded_outputs_from_inheriting_an_applied_matrix(self):
+        if not self.has_display_options:
+            self.skipTest("Display-transform encoding requires FFmpeg 6 or newer")
+        for angle, mirror in ((90, False), (90, True), (180, True), (270, True)):
+            with self.subTest(angle=angle, mirror=mirror):
+                source = self.rotated(angle, mirror=mirror)
+                stream = self.probe(source)
+                geometry = analyze(stream)
+                reference = self.root / f"reference-encoded-{angle}-{mirror}.png"
+                encoded = self.root / f"normalized-{angle}-{mirror}.mp4"
+                decoded = self.root / f"decoded-normalized-{angle}-{mirror}.png"
+                self.run_tool(["-i", source, "-frames:v", "1", reference])
+                self.run_tool(["-noautorotate", *input_options(stream, geometry), "-i", source,
+                               "-vf", geometry.filters() + ",sidedata=mode=delete:type=DISPLAYMATRIX",
+                               "-c:v", "libx264rgb", "-crf", "0", "-bf", "0", "-threads", "1", encoded])
+                self.run_tool(["-i", encoded, "-frames:v", "1", decoded])
+                metadata = self.probe(encoded)
+                self.assertFalse(any(item.get("rotation") for item in metadata.get("side_data_list", [])))
+                with Image.open(reference) as expected, Image.open(decoded) as actual:
+                    self.assertEqual(actual.size, geometry.output_size())
                     self.assertEqual(actual.convert("RGB").tobytes(), expected.convert("RGB").tobytes())
 
     def test_square_pixel_normalization_keeps_anamorphic_shape_and_maximum_height(self):

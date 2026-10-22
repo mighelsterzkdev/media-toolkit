@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -140,6 +141,15 @@ class MediaFidelityTests(unittest.TestCase):
                     self.assertEqual((stream["width"], stream["height"]), (20, 80))
                     self.assertEqual(stream["sample_aspect_ratio"], "1:1")
                     self.assertFalse(any(item.get("rotation") for item in stream.get("side_data_list", [])))
+
+    def test_older_tools_report_display_transform_requirements_before_conversion(self):
+        source = self.clip("anamorphic.mp4", "libx264", "-pix_fmt", "yuv420p", "-vf", "setsar=2")
+        plain = self.clip("plain.mp4", "libx264", "-pix_fmt", "yuv420p")
+        with patch("universal_downloader.local_media._display_override_cached", return_value=False):
+            checked = inspect_local_files([source], ffmpeg_location=self.ffmpeg.parent)[0]
+            self.assertIn("FFmpeg 6 or newer", checked["error"])
+            self.assertEqual(checked["targets"], [])
+            self.assertIsNone(inspect_local_files([plain], ffmpeg_location=self.ffmpeg.parent)[0]["error"])
 
     def test_video_animation_roundtrip_retains_each_variable_frame_delay(self):
         for durations in ([100, 300], [40, 160, 80, 120]):

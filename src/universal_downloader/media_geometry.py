@@ -193,3 +193,21 @@ def analyze(stream):
     width, height = _positive_dimension(stream.get("width")), _positive_dimension(stream.get("height"))
     clockwise, mirrored, stretch = _orientation(stream)
     return VideoGeometry(width, height, _ratio(stream.get("sample_aspect_ratio")) * stretch, clockwise, mirrored)
+
+
+def input_options(stream, geometry):
+    """Clear inherited stream transforms after capturing their geometry.
+
+    FFmpeg 6+ can otherwise copy a stream-level display matrix to an encoded
+    output even when its frame side data was removed by a filter. Setting an
+    input rotation rebuilds the whole matrix, including any reflections, as
+    identity. Apply the original transform explicitly through ``filters`` and
+    pass these options before ``-i`` together with ``-noautorotate``. Packet
+    copies must keep their original metadata and never use these options.
+    """
+    if not geometry.normalization_required:
+        return []
+    index = stream.get("index")
+    if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+        raise DownloadError("The selected video stream has invalid metadata.")
+    return [f"-display_rotation:{index}", "0"]

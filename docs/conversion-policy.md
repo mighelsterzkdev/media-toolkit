@@ -22,6 +22,9 @@ An extension alone never proves codec compatibility.
 
 - Stream copies retain their display metadata. Encoded video applies rotation,
   reflection and pixel aspect ratio once, then writes square-pixel output.
+  Captured display transforms require FFmpeg 6+; its input display matrix is
+  reset before applying the checked transform, and encoded frame side data is
+  cleared. Unsupported older tools report an actionable inspection error.
 - Height limits use displayed dimensions. Video profiles pad to even pixels
   inside the limit. A limit below two pixels cannot produce these video profiles.
 - Output dimensions must satisfy both resource limits and the specific encoder's
