@@ -50,4 +50,9 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - name: Check committed desktop assets are reproducible
-        run: git diff --exit-code -- ../src/universal_downloader/desktop_assets
+        run: |
+          git diff --exit-code -- ../src/universal_downloader/desktop_assets
+          if [ -n "$(git ls-files --others --exclude-standard -- ../src/universal_downloader/desktop_assets)" ]; then
+            git ls-files --others --exclude-standard -- ../src/universal_downloader/desktop_assets
+            exit 1
+          fi

@@ -7,7 +7,6 @@ import tempfile
 from PIL import Image
 
 from . import local_conversion, local_media
-from .conversions import convert_file
 from .errors import DownloadError
 from .limits import validate_file_limits
 from .local_animation import _frames, _save_sequence
@@ -47,36 +46,40 @@ def _resized_animation(checked, target, maximum, directory):
 def convert_downloaded_file(source, target, destination, *, inspected, kind, max_height=None, max_size=None,
                             progress_hook=None, logger=None):
     source, destination = Path(source), Path(destination)
-    checked = local_media.inspect_local_files([source])[0]
+    checked = local_media.inspect_local_files([source], max_height=max_height)[0]
     if checked.get("error"):
         raise DownloadError(checked["error"])
     expected = "animation" if kind == "image" and inspected.animated and not inspected.animation_video else "video" if inspected.animation_video else kind
     if checked["media_type"] != expected:
         raise DownloadError("The downloaded file does not match the checked media type. Check the link again.")
-    # Keep explicit MP4 resizing; video animations use the shared streaming
-    # encoder, including social GIFs whose original source is an MP4.
-    # An animation that already fits must stay on its frame-preserving path.
+    # Every video target uses the same checked geometry/height plan. Image
+    # animations keep their bounded frame-preserving preparation when resized.
     height = checked.get("height")
     resize = max_height is not None and (height is None or height > max_height
              or target == "mp4" and height + height % 2 > max_height)
-    resize_animation = resize and checked["media_type"] == "animation" and target in ("gif", "mp4")
-    legacy = resize and checked["media_type"] == "video" and target == "mp4"
-    if legacy:
-        return convert_file(source, target, destination, max_height=max_height, max_size=max_size, logger=logger)
+    resize_animation = resize and checked["media_type"] == "animation" and target in ("gif", "webp", "apng", "mp4")
     if target not in checked["targets"] and not resize_animation:
-        # A source selected from adaptive renditions may already use the chosen
-        # compatible container. Keep its bytes when no conversion is necessary.
-        if checked["media_type"] in ("audio", "video") and checked["format"] == target:
+        # Adaptive renditions may already match the chosen codec profile. A
+        # matching extension alone is insufficient: encoding can also be absent
+        # because its encoder or dimension requirements could not be satisfied.
+        if (checked["media_type"] in ("audio", "video") and checked["format"] == target
+                and checked.get("_native_compatible")):
             validate_file_limits(source, max_size=max_size, max_height=max_height, ffmpeg=local_media._tools()[0].parent)
             return publish_file(source, destination)
         raise DownloadError("The downloaded file cannot be converted to the chosen format. Choose another compatible output.")
     with tempfile.TemporaryDirectory(prefix=".desktop-convert-", dir=destination.parent) as temporary:
         directory = Path(temporary)
         if resize_animation:
+            if progress_hook:
+                progress_hook({"status": "converting", "operation": "encoding", "progress": None, "speed": None, "eta": None})
             checked = _resized_animation(checked, target, max_height, directory)
-        converted = local_media.convert_local_file(checked, target, directory,
+        if resize_animation and target == "apng":
+            # The checked intermediate already is the final resized APNG.
+            converted = Path(checked["source"])
+        else:
+            converted = local_media.convert_local_file(checked, target, directory,
                                                    background="#FFFFFF", progress_hook=progress_hook,
-                                                   max_height=max_height if target in local_media._ANIMATION else None)
+                                                   max_height=max_height)
         validate_file_limits(converted, max_size=max_size, max_height=max_height,
                              ffmpeg=local_media._tools()[0].parent if max_height is not None and target in local_media._VIDEO else None)
         return publish_file(converted, destination)

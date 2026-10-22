@@ -234,7 +234,7 @@ class LocalMediaTests(unittest.TestCase):
         self.assertEqual(checked["media_type"], "video")
         self.assertEqual(checked["format"], "mkv")
         self.assertIn("other tracks", checked["target_notes"]["mp4"])
-        self.assertEqual(set(checked["targets"]), {"mp4", "mov", "webm", "gif", "webp", "apng", "mp3", "wav", "flac", "m4a", "aac", "opus", "ogg", "aiff"})
+        self.assertEqual(set(checked["targets"]), {"mp4", "mkv", "mov", "webm", "gif", "webp", "apng", "mp3", "wav", "flac", "m4a", "aac", "opus", "ogg", "aiff"})
         for target in ("mp4", "mov", "webm", "mp3"):
             with self.subTest(target=target):
                 output = convert_local_file(checked, target, self.output)

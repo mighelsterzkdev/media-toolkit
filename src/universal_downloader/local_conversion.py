@@ -40,6 +40,10 @@ _ENCODERS = {
     "gif": "GIF", "jp2": "JPEG2000",
 }
 _ENCODER_FEATURES = {"png": "zlib", "jpg": "jpg", "webp": "webp", "avif": "avif", "tiff": "libtiff", "jp2": "jpg_2000"}
+# Pixel-count limits alone do not cover very wide or tall images. These are
+# the actual limits of the encoders and of the AVIF decoder shipped with them.
+# libavif's default 32768-pixel edge limit also applies when reopening output.
+_OUTPUT_MAX_EDGE = {"jpg": 65_500, "webp": 16_383, "avif": 32_768, "gif": 65_535, "tga": 65_535}
 IMAGE_TARGET_NOTES = {
     "jpg": "Lossy image. Transparency uses the selected background.",
     "bmp": "Uncompressed image. Transparency uses the selected background.",
@@ -122,6 +126,7 @@ def _targets(native: str, width: int | None = None, height: int | None = None) -
         target for target, encoder in _ENCODERS.items()
         if target != native and encoder in Image.SAVE
         and (target not in _ENCODER_FEATURES or _ENCODER_FEATURES[target] in supported_features)
+        and (target not in _OUTPUT_MAX_EDGE or all(value is None or value <= _OUTPUT_MAX_EDGE[target] for value in (width, height)))
         and (target != "ico" or width is not None and height is not None and width == height and 1 <= width <= 256)
     ]
 

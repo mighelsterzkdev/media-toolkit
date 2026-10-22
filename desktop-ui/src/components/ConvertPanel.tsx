@@ -32,13 +32,19 @@ const preferredFormats = {
 const formatNames: Record<string, string> = { webp: 'WebP', webm: 'WebM' }
 function formatName(value: string) { return formatNames[value] ?? value.toUpperCase() }
 function mediaType(file: LocalFile) { return file.media_type ?? (file.animated ? 'animation' : 'image') }
+function targetLabel(target: string, files: LocalFile[]) {
+  const compatible = files.filter(file => file.targets.includes(target))
+  const nativeMedia = compatible.length > 0 && compatible.every(file => ['audio', 'video'].includes(mediaType(file)) && file.format?.toLowerCase() === target)
+  return `${formatName(target)}${nativeMedia ? ' compatibility' : ''}`
+}
 function preservesMedia(file: LocalFile, target: string) { return (preferredFormats[mediaType(file)] as readonly string[]).includes(target) }
 function targetNeedsTools(file: LocalFile, target: string) { return Boolean(file.requires_tools || ['audio', 'video'].includes(mediaType(file)) || ffmpegFormats.has(target)) }
 function defaultTarget(files: LocalFile[], targets: string[], ffmpegReady: boolean) {
-  // A video stays a video by default, even when extracting audio would cover more files.
-  const singleCategory = new Set(files.map(mediaType)).size === 1
+  // Defaults preserve a single media category. Mixed sources or extraction
+  // require an explicit choice, even when another format would cover more files.
+  if (new Set(files.map(mediaType)).size !== 1) return undefined
   const sameCategory = targets.filter(target => files.some(file => file.targets.includes(target) && preservesMedia(file, target)))
-  const categoryCandidates = singleCategory && sameCategory.length > 0 ? sameCategory : targets
+  const categoryCandidates = sameCategory
   const readyCandidates = ffmpegReady ? categoryCandidates : categoryCandidates.filter(target => files.filter(file => file.targets.includes(target)).every(file => !targetNeedsTools(file, target)))
   const candidates = readyCandidates.length > 0 ? readyCandidates : categoryCandidates
   return candidates.reduce<string | undefined>((best, candidate) => {
@@ -94,7 +100,8 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
   const compatible = target ? selected.filter(file => file.targets.includes(target)) : []
   const skipped = selected.length - compatible.length
   const needsTools = Boolean(target && !ffmpegReady && compatible.some(file => targetNeedsTools(file, target)))
-  const flattensAlpha = Boolean(target && flattenFormats.has(target) && compatible.some(file => file.transparent))
+  const flattensAlpha = Boolean(target && compatible.some(file => file.transparent
+    && (mediaType(file) === 'video' ? file.background_targets?.includes(target) : flattenFormats.has(target))))
   const targetNotes = target ? [...new Set(compatible.map(file => file.target_notes?.[target]).filter((note): note is string => Boolean(note)))] : []
 
   function selectFile(id: string, checked: boolean) {
@@ -137,6 +144,7 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
             <FileIcon className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <div className="conversion-file-copy"><p title={file.name}>{file.name}</p>
               {file.error ? <span className="inline-error">{file.error}</span> : <span>{fileDescription(file)}</span>}
+              {!checking && !file.error && file.targets.length === 0 ? <span>No compatible output formats are available with the installed tools.</span> : null}
               {willSkip ? <span className="conversion-file-skip">{file.format?.toLowerCase() === target ? `Already ${formatName(target)}` : `Incompatible with ${formatName(target)}`} · skipped</span> : null}
             </div>
             <Button variant="ghost" size="icon" aria-label={`Remove ${file.name}`} title="Remove from selection" disabled={busy} onClick={() => onRemove(file.id)}><X className="size-4" /></Button>
@@ -146,21 +154,23 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
     </>}
     {checking ? <div className="checking-state" role="status"><LoaderCircle className="size-4 animate-spin" />Checking files…</div> : null}
     {conversion.error ? <div className="inspection-error" role="alert"><CircleAlert className="size-4 shrink-0" /><span>{conversion.error}</span></div> : null}
-    {selected.length > 0 && !checking && target ? <div className="conversion-options">
+    {selected.length > 0 && !checking ? <div className="conversion-options">
       <div className="conversion-target-field"><Label htmlFor="conversion-format">Convert to</Label>
-        <Select value={target} onValueChange={value => setPreference({ target: value, selection: selectionKey })} disabled={busy}>
-          <SelectTrigger id="conversion-format" aria-describedby="conversion-compatibility"><SelectValue /></SelectTrigger>
-          <SelectContent>{groups.map(group => <SelectGroup key={group.label}><SelectLabel>{group.label}</SelectLabel>{group.formats.map(format => <SelectItem key={format} value={format} textValue={formatName(format)}>{formatName(format)}<span className="conversion-format-count"> · {selected.filter(file => file.targets.includes(format)).length} / {selected.length} {selected.length === 1 ? 'file' : 'files'}</span></SelectItem>)}</SelectGroup>)}</SelectContent>
+        <Select value={target ?? ''} onValueChange={value => setPreference({ target: value, selection: selectionKey })} disabled={busy}>
+          <SelectTrigger id="conversion-format" aria-describedby="conversion-compatibility"><SelectValue placeholder="Choose a format" /></SelectTrigger>
+          <SelectContent>{groups.map(group => <SelectGroup key={group.label}><SelectLabel>{group.label}</SelectLabel>{group.formats.map(format => <SelectItem key={format} value={format} textValue={targetLabel(format, selected)}>{targetLabel(format, selected)}<span className="conversion-format-count"> · {selected.filter(file => file.targets.includes(format)).length} / {selected.length} {selected.length === 1 ? 'file' : 'files'}</span></SelectItem>)}</SelectGroup>)}</SelectContent>
         </Select>
       </div>
-      <p id="conversion-compatibility" className="field-help" role="status">{compatible.length} of {selected.length} selected {selected.length === 1 ? 'file' : 'files'} can convert to {formatName(target)}.{skipped > 0 ? ` The other ${skipped === 1 ? 'file is' : `${skipped} files are`} already that format or incompatible and will be skipped.` : ''}</p>
+      <p id="conversion-compatibility" className="field-help" role="status">{target
+        ? <>{compatible.length} of {selected.length} selected {selected.length === 1 ? 'file' : 'files'} can convert to {formatName(target)}.{skipped > 0 ? ` The other ${skipped === 1 ? 'file is' : `${skipped} files are`} already that format or incompatible and will be skipped.` : ''}</>
+        : 'Choose an output format before converting this selection.'}</p>
       {targetNotes.map(note => <p key={note} className="field-help">{note}</p>)}
       {needsTools ? <p className="field-help">Install FFmpeg to convert this selection.</p> : null}
-      {flattensAlpha ? <div className="alpha-background"><Label>{formatName(target)} background</Label>
+      {flattensAlpha && target ? <div className="alpha-background"><Label>{formatName(target)} background</Label>
         <RadioGroup value={background} onValueChange={value => setBackground(value as '#FFFFFF' | '#000000')} aria-label={`${formatName(target)} background`} orientation="horizontal" className="flex flex-wrap gap-6">
           <Label htmlFor="background-white" className="background-choice"><RadioGroupItem id="background-white" value="#FFFFFF" disabled={busy} />White</Label>
           <Label htmlFor="background-black" className="background-choice"><RadioGroupItem id="background-black" value="#000000" disabled={busy} />Black</Label>
-        </RadioGroup><p>{formatName(target)} {target === 'gif' ? 'keeps fully transparent pixels. Partially transparent areas will use this background.' : 'cannot keep transparency. Transparent areas will use this background.'}</p>
+        </RadioGroup><p>{target === 'gif' ? 'GIF keeps fully transparent pixels. Partially transparent areas will use this background.' : 'Transparent areas will use this background for this output.'}</p>
       </div> : null}
     </div> : null}
     <div className="download-footer">

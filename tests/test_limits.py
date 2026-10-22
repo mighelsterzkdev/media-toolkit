@@ -16,7 +16,7 @@ from universal_downloader.dependencies import find_ffmpeg
 from universal_downloader.downloader import DownloadRequest, download
 from universal_downloader.errors import DownloadError
 from universal_downloader.inspection import MediaInspection
-from universal_downloader.limits import TransferBudget, limited_format_selector
+from universal_downloader.limits import TransferBudget, limited_format_selector, validate_download_source_limits
 
 
 class _Logger:
@@ -73,6 +73,43 @@ class LimitSelectionTests(unittest.TestCase):
         low = _format("low", video="none", audio="aac", size=40)
         high = _format("high", video="none", audio="aac", size=80)
         self.assertEqual(self.select([low, high], size=50, kind="audio")["format_id"], "low")
+
+    def test_audio_can_use_muxed_source_when_native_audio_sources_exceed_budget(self):
+        native = _format("audio", video="none", audio="aac", size=80)
+        combined = _format("combined", height=240, audio="aac", size=40)
+        self.assertEqual(self.select([combined, native], size=50, kind="audio")["format_id"], "combined")
+
+    def test_checked_original_height_and_conversion_options_use_actual_selection_policy(self):
+        source = _format("source", height=1080, audio="aac", size=40)
+        inspected = MediaInspection("https://example.com/video", {"formats": [source]}, ("video", "audio"))
+        with self.assertRaisesRegex(DownloadError, "No available source"):
+            validate_download_source_limits(inspected, "video", target=None, max_height=720, max_size=None)
+        for target in ("mp4", "mkv", "mov", "webm", "gif", "webp", "apng"):
+            validate_download_source_limits(inspected, "video", target=target, max_height=720, max_size=None)
+        source["height"] = None
+        with self.assertRaisesRegex(DownloadError, "No available source"):
+            validate_download_source_limits(inspected, "video", target=None, max_height=720, max_size=None)
+
+    def test_checked_options_budget_all_required_streams_and_omit_unmonitorable_protocols(self):
+        audio = _format("audio", video="none", audio="aac", size=80)
+        video = _format("video", height=720, size=80)
+        inspected = MediaInspection("https://example.com/video", {"formats": [audio, video]}, ("video", "audio"))
+        for target in (None, "mp4"):
+            with self.assertRaisesRegex(DownloadError, "No available source"):
+                validate_download_source_limits(inspected, "video", target=target, max_height=None, max_size=100)
+        # An animation does not download an audio stream that it cannot use.
+        validate_download_source_limits(inspected, "video", target="gif", max_height=None, max_size=100)
+        video["protocol"] = "m3u8_native"
+        with self.assertRaises(DownloadError):
+            validate_download_source_limits(inspected, "video", target="gif", max_height=None, max_size=100)
+
+    def test_checked_original_ignores_low_drm_and_storyboard_renditions(self):
+        high = _format("high", height=1080, audio="aac")
+        drm = {**_format("drm", height=240, audio="aac"), "has_drm": True}
+        storyboard = {**_format("storyboard", height=120), "ext": "mhtml", "protocol": "mhtml"}
+        inspected = MediaInspection("https://example.com/video", {"formats": [drm, storyboard, high]}, ("video", "audio"))
+        with self.assertRaisesRegex(DownloadError, "No available source"):
+            validate_download_source_limits(inspected, "video", target=None, max_height=720, max_size=None)
 
     def test_unmonitorable_hls_or_external_protocol_cannot_claim_a_transfer_cap(self):
         for protocol in ("m3u8", "m3u8_native", "rtmp", "rtsp"):
@@ -157,6 +194,10 @@ class LimitDownloadTests(unittest.TestCase):
             ("audio.m4a", ["-vn", "-c:a", "copy"]),
         ):
             subprocess.run([str(cls.ffmpeg), "-hide_banner", "-loglevel", "error", "-i", str(cls.root / "video.mp4"), *options, str(cls.root / name)], check=True, capture_output=True, timeout=30)
+        help_text = subprocess.run([str(cls.ffmpeg), "-hide_banner", "-h", "full"], capture_output=True, text=True, timeout=20).stdout
+        rotation = (["-display_rotation:v:0", "90", "-i", str(cls.root / "video.mp4"), "-c", "copy"] if "-display_rotation" in help_text else
+                    ["-i", str(cls.root / "video.mp4"), "-c", "copy", "-metadata:s:v:0", "rotate=90"])
+        subprocess.run([str(cls.ffmpeg), "-hide_banner", "-loglevel", "error", *rotation, str(cls.root / "rotated.mp4")], check=True, capture_output=True, timeout=30)
         first = Image.new("RGB", (96, 72), "red")
         first.save(cls.root / "animation.gif", save_all=True, append_images=[Image.new("RGB", (96, 72), "blue")], duration=200)
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(_Handler, directory=str(cls.root)))
@@ -198,6 +239,22 @@ class LimitDownloadTests(unittest.TestCase):
         with self.assertRaisesRegex(DownloadError, "completed file exceeds --max-height"):
             download(DownloadRequest(inspected.url, output_dir=self.folder / "downloads", max_height=24), inspected=inspected, logger=_Logger())
         self.assertEqual(list((self.folder / "downloads").iterdir()), [])
+
+    def test_actual_display_height_is_verified_when_rotation_exceeds_coded_height(self):
+        inspected = self.inspected("/rotated.mp4", declared_height=72)
+        with self.assertRaisesRegex(DownloadError, "completed file exceeds --max-height"):
+            download(DownloadRequest(inspected.url, output_dir=self.folder / "downloads", max_height=80), inspected=inspected, logger=_Logger())
+        self.assertEqual(list((self.folder / "downloads").iterdir()), [])
+
+    def test_direct_video_inspection_uses_probed_display_height_for_checked_options(self):
+        from universal_downloader.downloader import inspect_media
+        from universal_downloader.desktop_service import _asset_options
+        inspected = inspect_media(self.base + "/rotated.mp4", logger=_Logger())
+        self.assertEqual(inspected.heights, (96,))
+        options = _asset_options(inspected, {"max_height": 80, "max_size": None})
+        video = next(item for item in options if item["id"] == "video")
+        self.assertNotIn("original", {option["id"] for option in video["options"]})
+        self.assertTrue({"mp4", "mkv", "mov", "webm"}.issubset({option["id"] for option in video["options"]}))
 
     def test_explicit_mp4_conversion_resizes_and_preserves_audio(self):
         inspected = self.inspected()

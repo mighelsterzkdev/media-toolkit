@@ -101,6 +101,12 @@ def selection_identity(descriptor):
     return _digest(_selection(descriptor))
 
 
+def conversion_background(image, target, background):
+    """Only flattening outputs distinguish the selected background color."""
+    targets = (image.get("background_targets") or ()) if image.get("media_type") == "video" else ("jpg", "bmp", "gif", "mp4")
+    return background if image.get("transparent") and target in targets else None
+
+
 def resolve_restored_selection(descriptor, inspected):
     """Recheck the link, then require exactly the previously selected asset."""
     expected = _selection(descriptor)
@@ -139,6 +145,12 @@ def _image(value):
     result = {"name": _string(value.get("name"), 300), "source": source, "signature": fingerprint,
               "format": _string(value.get("format"), 30), "media_type": kind, "targets": list(dict.fromkeys(targets)),
               "transparent": value["transparent"], "error": None}
+    if value.get("background_targets") is not None:
+        backgrounds = value["background_targets"]
+        if (not isinstance(backgrounds, list) or len(backgrounds) > len(targets)
+                or any(not isinstance(target, str) or target not in targets for target in backgrounds)):
+            raise ValueError("invalid saved background targets")
+        result["background_targets"] = list(dict.fromkeys(backgrounds))
     duration = value.get("duration")
     if duration is not None:
         result["duration"] = _number(duration)
@@ -216,7 +228,7 @@ def restore_task(record):
         value.update(status="cancelled", error=RESTORED_MESSAGE, path=None, can_convert=False)
     if value["action"] == "convert":
         identity = ("convert", image["source"], image["signature"], value["format"],
-                    background if value["format"] in ("jpg", "bmp", "gif", "mp4") and image["transparent"] else None, settings["output"])
+                    conversion_background(image, value["format"], background), settings["output"])
     else:
         identity = (value["url"], policy, value["format"], settings["output"], settings["max_height"], settings["max_size"])
         if selection_key is not None:

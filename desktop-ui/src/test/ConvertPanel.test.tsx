@@ -40,13 +40,101 @@ describe('conversion defaults and explicit choices', () => {
     expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('M4A')
   })
 
-  it('defaults a mixed media batch to the output with the most compatible selected files', async () => {
-    const onConvert = vi.fn(async () => undefined)
-    render(<ConvertPanel {...props([video, audio, image])} onConvert={onConvert} />)
-    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('MP3')
+  it.each([
+    ['m4a', audio],
+    ['mkv', video],
+  ])('identifies native %s codec conversion as compatibility and submits its format', async (target, source) => {
+    const user = userEvent.setup()
+    const callbacks = props([{ ...source, format: target, targets: [target] }])
+    render(<ConvertPanel {...callbacks} />)
+    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent(`${target.toUpperCase()} compatibility`)
+    await choose(user, `${target.toUpperCase()} compatibility`)
+    await user.click(screen.getByRole('button', { name: 'Convert' }))
+    expect(callbacks.onConvert).toHaveBeenCalledWith([source.id], target, '#FFFFFF')
+  })
+
+  it('keeps the generic format name when any compatible file has another source format', async () => {
+    const user = userEvent.setup()
+    render(<ConvertPanel {...props([
+      { ...video, format: 'mkv', targets: ['mkv'] },
+      { ...video, id: 'second-video', format: 'mov', targets: ['mkv'] },
+    ])} />)
+    expect(screen.getByRole('combobox', { name: 'Convert to' })).not.toHaveTextContent('compatibility')
+    await user.click(screen.getByRole('combobox', { name: 'Convert to' }))
+    expect(screen.getByRole('option', { name: /^MKV · 2 \/ 2 files$/ })).toBeInTheDocument()
+  })
+
+  it('labels compatibility using only files eligible for that target', () => {
+    render(<ConvertPanel {...props([
+      { ...video, format: 'mkv', targets: ['mkv'] },
+      { ...video, id: 'second-video', format: 'mov', targets: ['mp3'] },
+    ])} />)
+    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('MKV compatibility')
+  })
+
+  it('explains when a checked file has no available output formats', () => {
+    render(<ConvertPanel {...props([{ ...image, targets: [] }])} />)
+    expect(screen.getByText('No compatible output formats are available with the installed tools.')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Select Icon.png' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Convert' })).toBeDisabled()
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+  })
+
+  it('retains an explicit inspection error without adding a no-output explanation', () => {
+    render(<ConvertPanel {...props([{ ...image, targets: [], error: 'The source file could not be read.' }])} />)
+    expect(screen.getByText('The source file could not be read.')).toBeInTheDocument()
+    expect(screen.queryByText('No compatible output formats are available with the installed tools.')).not.toBeInTheDocument()
+  })
+
+  it('waits for file checking to finish before explaining unavailable formats', () => {
+    const callbacks = props([{ ...image, targets: [] }])
+    render(<ConvertPanel {...callbacks} conversion={{ ...callbacks.conversion, status: 'checking' }} />)
+    expect(screen.queryByText('No compatible output formats are available with the installed tools.')).not.toBeInTheDocument()
+  })
+
+  it.each(['MKV', 'MOV', 'WebM'])('submits the selected %s background when its checked video plan flattens transparency', async target => {
+    const user = userEvent.setup()
+    const callbacks = props([{ ...video, transparent: true, targets: ['mkv', 'mov', 'webm'], background_targets: ['mkv', 'mov', 'webm'] }])
+    render(<ConvertPanel {...callbacks} />)
+    await choose(user, target)
+    expect(screen.getByRole('radiogroup', { name: `${target} background` })).toBeInTheDocument()
+    expect(screen.getByText('Transparent areas will use this background for this output.')).toBeInTheDocument()
+    await user.click(screen.getByRole('radio', { name: 'Black' }))
+    await user.click(screen.getByRole('button', { name: 'Convert' }))
+    expect(callbacks.onConvert).toHaveBeenCalledWith(['video'], target.toLowerCase(), '#000000')
+  })
+
+  it('does not offer a background for a checked alpha-preserving video stream copy', () => {
+    render(<ConvertPanel {...props([{ ...video, transparent: true, targets: ['webm'], background_targets: [] }])} />)
+    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('WebM')
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument()
+  })
+
+  it('requires an explicit format for mixed media instead of defaulting to audio extraction', async () => {
+    const user = userEvent.setup()
+    const callbacks = props([video, audio, image])
+    const view = render(<ConvertPanel {...callbacks} />)
+    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('Choose a format')
+    expect(screen.getByRole('button', { name: 'Convert' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Convert' }))
+    expect(callbacks.onConvert).not.toHaveBeenCalled()
+    await choose(user, 'MP3')
     expect(screen.getByText(/2 of 3 selected files can convert to MP3/)).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Convert' }))
-    expect(onConvert).toHaveBeenCalledWith(['video', 'audio'], 'mp3', '#FFFFFF')
+    view.rerender(<ConvertPanel {...callbacks} conversion={{ ...callbacks.conversion, files: structuredClone([video, audio, image]) }} />)
+    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('MP3')
+    await user.click(screen.getByRole('button', { name: 'Convert' }))
+    expect(callbacks.onConvert).toHaveBeenCalledWith(['video', 'audio'], 'mp3', '#FFFFFF')
+  })
+
+  it('requires an explicit format when no video-preserving encoder is available', async () => {
+    const user = userEvent.setup()
+    const callbacks = props([{ ...video, targets: ['mp3', 'gif'] }])
+    render(<ConvertPanel {...callbacks} />)
+    expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('Choose a format')
+    expect(screen.getByRole('button', { name: 'Convert' })).toBeDisabled()
+    await choose(user, 'GIF')
+    await user.click(screen.getByRole('button', { name: 'Convert' }))
+    expect(callbacks.onConvert).toHaveBeenCalledWith(['video'], 'gif', '#FFFFFF')
   })
 
   it('preserves an explicit audio extraction across refreshed state but resets it for a new video selection', async () => {
@@ -68,8 +156,11 @@ describe('conversion defaults and explicit choices', () => {
     expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('MP3')
   })
 
-  it('prefers an available image conversion in a tied mixed batch while FFmpeg is missing', () => {
+  it('keeps offline image conversion available after an explicit choice in a mixed batch', async () => {
+    const user = userEvent.setup()
     render(<ConvertPanel {...props([image, audio])} ffmpegReady={false} />)
+    expect(screen.getByRole('button', { name: 'Convert' })).toBeDisabled()
+    await choose(user, 'WebP')
     expect(screen.getByRole('combobox', { name: 'Convert to' })).toHaveTextContent('WebP')
     expect(screen.getByRole('button', { name: 'Convert' })).toBeEnabled()
   })

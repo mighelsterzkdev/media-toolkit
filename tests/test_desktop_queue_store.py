@@ -74,6 +74,28 @@ class DesktopQueueStoreTests(unittest.TestCase):
         self.assertNotIn("http_headers", restored["_image"])
         self.assertNotIn("SECRET", self.store.path.read_text(encoding="utf-8"))
 
+    def test_video_background_choices_stay_distinct_after_restart_only_for_flattening_outputs(self):
+        source = {"name": "source.mkv", "source": str(self.root / "source.mkv"),
+                  "signature": {"size": 40, "mtime_ns": 20, "ctime_ns": 10, "sha256": "a" * 64},
+                  "format": "mkv", "media_type": "video", "transparent": True,
+                  "targets": ["mkv", "mov", "webm", "apng"], "background_targets": ["mkv", "mov", "webm"]}
+        tasks = [self.task(url="", action="convert", kind="video", source_format="mkv", format=target,
+                           _image=source, _background=background)
+                 for target in source["targets"] for background in ("#FFFFFF", "#000000")]
+        self.assertTrue(self.store.save(tasks))
+        restored = self.store.load()
+        for index, target in enumerate(source["targets"]):
+            white, black = restored[index * 2:index * 2 + 2]
+            with self.subTest(target=target):
+                self.assertEqual(white["_image"]["background_targets"], source["background_targets"])
+                if target in source["background_targets"]:
+                    self.assertNotEqual(white["_identity"], black["_identity"])
+                    self.assertEqual(white["_identity"][4], "#FFFFFF")
+                    self.assertEqual(black["_identity"][4], "#000000")
+                else:
+                    self.assertEqual(white["_identity"], black["_identity"])
+                    self.assertIsNone(white["_identity"][4])
+
     def test_expanded_download_outputs_survive_restart_with_exact_target(self):
         targets = {
             "image": ("png", "jpg", "webp", "avif", "bmp", "tiff", "ico", "tga", "gif", "jp2", "apng", "mp4", "mkv", "mov", "webm"),

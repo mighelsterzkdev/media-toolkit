@@ -75,11 +75,20 @@ def media_identity(request, inspected, kind: str, target: str | None) -> Downloa
         "asset": asset, "role": role, "target": target or "original",
         "max_height": height, "max_size": getattr(request, "max_size", None),
     }
-    if (getattr(request, "desktop_conversion", False) and target in ("gif", "webp", "apng")
-            and (kind == "video" or inspected.animation_video)):
-        # The desktop encoder now keeps video dimensions and timing. A GIF
-        # from the older 15-fps/720px profile is not this conversion's cache.
-        descriptor["conversion_profile"] = "video-animation-v1"
+    if getattr(request, "desktop_conversion", False) and target:
+        from .desktop_download_formats import DOWNLOAD_TARGETS_BY_KIND
+        animations = {"gif", "webp", "apng"}
+        # Encoder profiles matter as well as extensions. In particular, the
+        # CLI's fixed-bitrate MP3 and old reduced-frame-rate GIF are different
+        # outputs from the desktop's audio/video/animation profiles.
+        if target in DOWNLOAD_TARGETS_BY_KIND["audio"]:
+            descriptor["conversion_profile"] = "audio-profile-v1"
+        elif target in animations and (kind == "video" or inspected.animation_video):
+            descriptor["conversion_profile"] = "video-animation-v2"
+        elif target in DOWNLOAD_TARGETS_BY_KIND["video"] - animations:
+            descriptor["conversion_profile"] = "video-profile-v1"
+        elif target in animations and inspected.animated:
+            descriptor["conversion_profile"] = "image-animation-v1"
     key = sha256(json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return DownloadIdentity(key, source, media_id, role, target, height)
 

@@ -2,6 +2,7 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs/promises'
+import { writeBuildManifest } from './build-manifest.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const manifest = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'))
@@ -63,4 +64,5 @@ for (const entry of await fs.readdir(path.join(root, 'dist', 'assets'), { withFi
   await fs.copyFile(path.join(root, 'dist', 'assets', entry.name), path.join(target, 'assets', entry.name))
 }
 await fs.writeFile(path.join(target, 'THIRD-PARTY-NOTICES.txt'), notices, 'utf8')
+await writeBuildManifest(root, target)
 console.log(`Copied desktop assets and notices for ${packages.size} runtime dependencies.`)

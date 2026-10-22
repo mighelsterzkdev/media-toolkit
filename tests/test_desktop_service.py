@@ -64,6 +64,27 @@ class DesktopDescriptionTests(unittest.TestCase):
         self.assertEqual(labels["webp"], "WebP animation")
         self.assertEqual(labels["apng"], "APNG animation")
 
+    def test_native_av_targets_are_labeled_as_compatibility_conversions(self):
+        for kind, native, source in (("video", "mkv", {"vcodec": "ffv1", "acodec": "none"}),
+                                     ("audio", "m4a", {"vcodec": "none", "acodec": "alac"})):
+            inspected = MediaInspection("https://example.com/media", {"ext": native, **source}, (kind,))
+            with patch("universal_downloader.desktop_service.available_download_conversions", return_value={native: "Checks compatible codecs."}):
+                options = _asset_options(inspected, {"max_height": None, "max_size": None})[0]["options"]
+            self.assertEqual(options[0]["id"], "original")
+            self.assertTrue(options[0]["recommended"])
+            self.assertEqual(options[1]["label"], f"{native.upper()} compatibility")
+
+    def test_checked_options_hide_impossible_combined_budget_but_keep_video_only_animation(self):
+        formats = [
+            {"format_id": "audio", "url": "https://example.com/audio.m4a", "protocol": "https", "ext": "m4a", "vcodec": "none", "acodec": "aac", "filesize": 40},
+            {"format_id": "video", "url": "https://example.com/video.mp4", "protocol": "https", "ext": "mp4", "vcodec": "h264", "acodec": "none", "height": 720, "filesize": 80},
+        ]
+        inspected = MediaInspection("https://example.com/media", {"formats": formats}, ("video", "audio"))
+        with patch("universal_downloader.desktop_service.available_download_conversions", return_value={"mp4": "Video with audio.", "gif": "Animation without audio."}):
+            kinds = _asset_options(inspected, {"max_height": None, "max_size": 100})
+        video = next(kind for kind in kinds if kind["id"] == "video")
+        self.assertEqual([option["id"] for option in video["options"]], ["gif"])
+
 
 class _Handler(BaseHTTPRequestHandler):
     bodies = {}
@@ -299,6 +320,32 @@ class DesktopServiceTests(unittest.TestCase):
                 self.assertIn("matroska", result["format"]["format_name"])
                 self.assertEqual({stream["codec_type"] for stream in result["streams"]}, {"audio", "video"})
 
+    @unittest.skipUnless(find_ffmpeg(), "FFmpeg/ffprobe required")
+    def test_checked_height_limit_omits_unavailable_original_and_resizes_mkv(self):
+        tools = find_ffmpeg()
+        suffix = ".exe" if (tools / "ffmpeg.exe").is_file() else ""
+        fixture = self.root / "height-limited.mp4"
+        subprocess.run([str(tools / f"ffmpeg{suffix}"), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                        "testsrc=size=32x24:rate=10:duration=0.3", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.3",
+                        "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "1",
+                        "-c:a", "aac", str(fixture)], check=True, capture_output=True, timeout=30, **hidden_process_options())
+        _Handler.bodies["/height-limited.mp4"] = (fixture.read_bytes(), "video/mp4")
+        self.service.save_settings({"max_height": 13})
+        inspection = self.inspect("/height-limited.mp4")
+        video = next(kind for kind in inspection["assets"][0]["kinds"] if kind["id"] == "video")
+        options = {option["id"] for option in video["options"]}
+        self.assertNotIn("original", options)
+        self.assertTrue({"mp4", "mkv", "mov", "webm"}.issubset(options), options)
+        self.enqueue_inspected(inspection, kind="video", output_format="mkv")
+        state = self.wait(lambda value: value["tasks"][-1]["status"] in ("completed", "failed"))
+        task = state["tasks"][-1]
+        self.assertEqual(task["status"], "completed", task)
+        metadata = json.loads(subprocess.run([str(tools / f"ffprobe{suffix}"), "-v", "error", "-show_streams", "-of", "json", task["path"]],
+                                             check=True, capture_output=True, text=True, timeout=30, **hidden_process_options()).stdout)
+        video = next(stream for stream in metadata["streams"] if stream["codec_type"] == "video")
+        self.assertEqual((video["width"], video["height"]), (16, 12))
+        self.assertTrue(any(stream["codec_type"] == "audio" for stream in metadata["streams"]))
+
     def test_local_conversions_share_the_download_queue_and_independent_inspection(self):
         source = self.root / "local.png"
         source.write_bytes(_Handler.bodies["/image.png"][0])
@@ -314,6 +361,29 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertEqual([task["status"] for task in state["tasks"]], ["completed", "completed"], state)
         self.assertEqual([task["action"] for task in state["tasks"]], ["download", "convert"])
         self.assertTrue(all(task["can_convert"] for task in state["tasks"]))
+
+    def test_checked_video_background_metadata_controls_queue_deduplication(self):
+        tools = find_ffmpeg()
+        if tools is None:
+            self.skipTest("FFmpeg and ffprobe are not installed")
+        ffmpeg = tools / ("ffmpeg.exe" if (tools / "ffmpeg.exe").is_file() else "ffmpeg")
+        source = self.root / "transparent.mkv"
+        subprocess.run([str(ffmpeg), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                        "color=c=red@0.5:size=32x16:rate=2:duration=1,format=rgba", "-c:v", "ffv1", "-threads", "1", str(source)],
+                       check=True, capture_output=True, timeout=20, **hidden_process_options())
+        self.service.add_conversion_files([source])
+        state = self.wait(lambda state: state["conversion"]["status"] == "ready")
+        file = state["conversion"]["files"][0]
+        self.assertTrue(file["transparent"], file)
+        self.assertTrue({"mkv", "mov", "webm"}.issubset(file["background_targets"]), file)
+        with self.service._lock:
+            for target in ("mkv", "mov", "webm"):
+                for background in ("#FFFFFF", "#000000", "#FFFFFF"):
+                    self.service.enqueue_conversions([file["id"]], target, background)
+            self.assertEqual(len(self.service._tasks), 6)
+            self.assertEqual([task["_identity"][4] for task in self.service._tasks], ["#FFFFFF", "#000000"] * 3)
+            for task in self.service._tasks:
+                self.service.cancel_task(task["id"])
 
     def test_bulk_failure_continues_and_duplicate_urls_are_deduplicated(self):
         self.service.enqueue_links(f"# URLs\n{self.base}/missing.png\n{self.base}/image.png {self.base}/image.png\n{self.base}/other.jpg")

@@ -56,19 +56,21 @@ class DesktopDownloadFormatTests(unittest.TestCase):
         muxers = frozenset(("mp4", "matroska", "mov", "webm", "mp3", "wav", "flac", "ipod", "adts", "opus", "ogg", "aiff"))
         inspected = MediaInspection("https://example.com/v", {"ext": "mov", "height": 720, "vcodec": "h264", "acodec": "aac"}, ("video", "audio"), heights=(720,))
         with patch("universal_downloader.local_media._tools", return_value=(Path("ffmpeg"), Path("ffprobe"))), patch("universal_downloader.local_media._capabilities", return_value=(encoders, muxers)):
-            self.assertEqual(set(available_download_conversions(inspected, "video")), {"mp4", "mkv", "webm"})
-            self.assertEqual(set(available_download_conversions(inspected, "video", max_height=480)), {"mp4"})
+            self.assertEqual(set(available_download_conversions(inspected, "video")), {"mp4", "mkv", "mov", "webm"})
+            self.assertEqual(set(available_download_conversions(inspected, "video", max_height=480)), {"mp4", "mkv", "mov", "webm"})
             audio = available_download_conversions(inspected, "audio")
             self.assertEqual(set(audio), {"mp3", "wav", "flac", "m4a", "aac", "opus", "ogg", "aiff"})
             pseudo = replace(inspected, kinds=("image",), animated=True, animation_video=True)
             options = available_download_conversions(pseudo, "image")
-            self.assertEqual(set(options), {"mp4", "mkv", "webm"})
+            self.assertEqual(set(options), {"mp4", "mkv", "mov", "webm"})
             self.assertFalse({"jpg", "png", "gif", "apng", "webp"} & options.keys())
             with patch("universal_downloader.local_media._capabilities", return_value=(encoders | {"gif", "libwebp", "apng"}, muxers | {"gif", "webp", "apng"})):
                 for source, kind in ((inspected, "video"), (pseudo, "image")):
                     expanded = available_download_conversions(source, kind, max_height=480)
                     self.assertTrue({"gif", "webp", "apng"}.issubset(expanded))
                     self.assertIn("without audio", expanded["gif"])
+                    self.assertIn("a white background", expanded["gif"])
+                    self.assertNotIn("selected background", expanded["gif"])
 
     def test_missing_tools_hide_only_tool_dependent_outputs(self):
         with patch("universal_downloader.local_media._tools", side_effect=DownloadError("missing")):
@@ -76,7 +78,7 @@ class DesktopDownloadFormatTests(unittest.TestCase):
             media = MediaInspection("https://example.com/v", {}, ("video",))
             self.assertEqual(available_download_conversions(media, "video"), {})
 
-    def test_height_options_ignore_unplayable_drm_and_storyboard_sources(self):
+    def test_every_video_container_can_resize_the_available_playable_source(self):
         inspected = MediaInspection("https://example.com/video", {"formats": [
             {"height": 480, "vcodec": "h264", "acodec": "aac", "has_drm": True},
             {"height": 240, "vcodec": "images", "ext": "mhtml", "protocol": "mhtml"},
@@ -85,7 +87,11 @@ class DesktopDownloadFormatTests(unittest.TestCase):
         encoders = frozenset(("libx264", "aac", "libvpx-vp9", "libopus"))
         muxers = frozenset(("mp4", "matroska", "mov", "webm"))
         with patch("universal_downloader.local_media._tools", return_value=(Path("ffmpeg"), Path("ffprobe"))), patch("universal_downloader.local_media._capabilities", return_value=(encoders, muxers)):
-            self.assertEqual(set(available_download_conversions(inspected, "video", max_height=480)), {"mp4"})
+            self.assertEqual(set(available_download_conversions(inspected, "video", max_height=480)), {"mp4", "mkv", "mov", "webm"})
+
+    def test_native_audio_container_remains_an_explicit_compatibility_conversion(self):
+        inspected = MediaInspection("https://example.com/audio", {"ext": "m4a", "vcodec": "none", "acodec": "alac"}, ("audio",))
+        self.assertIn("m4a", available_download_conversions(inspected, "audio"))
 
 
 class DownloadConversionPipelineTests(unittest.TestCase):
@@ -96,6 +102,112 @@ class DownloadConversionPipelineTests(unittest.TestCase):
         environment = patch.dict(os.environ, {"UNIDOWN_DATA_DIR": str(self.root / "state")})
         environment.start()
         self.addCleanup(environment.stop)
+
+    def test_all_video_containers_resize_and_preserve_audio_through_shared_engine(self):
+        tools = find_ffmpeg()
+        if tools is None:
+            self.skipTest("FFmpeg and ffprobe are not installed")
+        suffix = ".exe" if (tools / "ffmpeg.exe").is_file() else ""
+        source = self.root / "source.mp4"
+        subprocess.run([str(tools / f"ffmpeg{suffix}"), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                        "testsrc=size=32x16:rate=10:duration=0.4", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.4",
+                        "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "1",
+                        "-c:a", "aac", str(source)], check=True, capture_output=True, timeout=20, **hidden_process_options())
+        original = source.read_bytes()
+        inspected = MediaInspection("https://example.com/video", {"ext": "mp4", "vcodec": "h264", "acodec": "aac", "height": 16}, ("video", "audio"), heights=(16,))
+        for target in ("mp4", "mkv", "mov", "webm"):
+            with self.subTest(target=target):
+                output = self.root / f"scaled.{target}"
+                self.assertTrue(convert_downloaded_file(source, target, output, inspected=inspected, kind="video", max_height=7))
+                metadata = json.loads(subprocess.run([str(tools / f"ffprobe{suffix}"), "-v", "error", "-show_streams", "-of", "json", str(output)],
+                                                     check=True, capture_output=True, text=True, timeout=20, **hidden_process_options()).stdout)
+                video = next(item for item in metadata["streams"] if item["codec_type"] == "video")
+                audio = next(item for item in metadata["streams"] if item["codec_type"] == "audio")
+                self.assertEqual((video["width"], video["height"]), (12, 6))
+                self.assertEqual(video["codec_name"], "vp9" if target == "webm" else "h264")
+                self.assertEqual(audio["codec_name"], "opus" if target == "webm" else "aac")
+        self.assertEqual(source.read_bytes(), original)
+        self.assertFalse(list(self.root.glob(".desktop-convert-*")))
+
+    def test_native_containers_normalize_incompatible_codecs_instead_of_copying_them(self):
+        tools = find_ffmpeg()
+        if tools is None:
+            self.skipTest("FFmpeg and ffprobe are not installed")
+        suffix = ".exe" if (tools / "ffmpeg.exe").is_file() else ""
+        cases = [("mkv", "video", "ffv1", "h264", ["-f", "lavfi", "-i", "testsrc=size=32x16:rate=10:duration=0.4", "-c:v", "ffv1"]),
+                 ("m4a", "audio", "alac", "aac", ["-f", "lavfi", "-i", "sine=frequency=440:duration=0.4", "-c:a", "alac"])]
+        for target, kind, original_codec, expected_codec, arguments in cases:
+            with self.subTest(target=target):
+                source, output = self.root / f"input.{target}", self.root / f"compatible.{target}"
+                subprocess.run([str(tools / f"ffmpeg{suffix}"), "-hide_banner", "-loglevel", "error", *arguments, "-threads", "1", str(source)],
+                               check=True, capture_output=True, timeout=20, **hidden_process_options())
+                original = source.read_bytes()
+                inspected = MediaInspection("https://example.com/media", {"ext": target, "vcodec": original_codec if kind == "video" else "none",
+                                           "acodec": original_codec if kind == "audio" else "none"}, (kind,))
+                self.assertTrue(convert_downloaded_file(source, target, output, inspected=inspected, kind=kind))
+                metadata = json.loads(subprocess.run([str(tools / f"ffprobe{suffix}"), "-v", "error", "-show_streams", "-of", "json", str(output)],
+                                                     check=True, capture_output=True, text=True, timeout=20, **hidden_process_options()).stdout)
+                self.assertEqual([item["codec_name"] for item in metadata["streams"]], [expected_codec])
+                self.assertEqual(source.read_bytes(), original)
+
+    def test_native_extension_never_substitutes_for_an_unavailable_compatibility_conversion(self):
+        tools = find_ffmpeg()
+        if tools is None:
+            self.skipTest("FFmpeg and ffprobe are not installed")
+        suffix = ".exe" if (tools / "ffmpeg.exe").is_file() else ""
+        source = self.root / "oversized.mkv"
+        subprocess.run([str(tools / f"ffmpeg{suffix}"), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                        "color=size=20000x2:rate=1:duration=1", "-c:v", "ffv1", "-threads", "1", str(source)],
+                       check=True, capture_output=True, timeout=20, **hidden_process_options())
+        original = source.read_bytes()
+        inspected = MediaInspection("https://example.com/video", {"ext": "mkv", "vcodec": "ffv1", "acodec": "none"}, ("video",))
+        output = self.root / "compatibility.mkv"
+        with self.assertRaisesRegex(DownloadError, "cannot be converted"):
+            convert_downloaded_file(source, "mkv", output, inspected=inspected, kind="video")
+        self.assertFalse(output.exists())
+        self.assertEqual(source.read_bytes(), original)
+        self.assertFalse(list(self.root.glob(".desktop-convert-*")))
+
+    def test_verified_native_compatible_video_keeps_its_bytes(self):
+        tools = find_ffmpeg()
+        if tools is None:
+            self.skipTest("FFmpeg and ffprobe are not installed")
+        suffix = ".exe" if (tools / "ffmpeg.exe").is_file() else ""
+        source = self.root / "compatible.mp4"
+        subprocess.run([str(tools / f"ffmpeg{suffix}"), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                        "color=size=32x16:rate=10:duration=0.4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "1", str(source)],
+                       check=True, capture_output=True, timeout=20, **hidden_process_options())
+        original = source.read_bytes()
+        inspected = MediaInspection("https://example.com/video", {"ext": "mp4", "vcodec": "h264", "acodec": "none"}, ("video",))
+        output = self.root / "copied.mp4"
+        self.assertTrue(convert_downloaded_file(source, "mp4", output, inspected=inspected, kind="video"))
+        self.assertEqual(output.read_bytes(), original)
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_resized_animation_offers_and_writes_every_supported_animation_format_including_native(self):
+        for native, encoder in (("gif", "GIF"), ("webp", "WEBP"), ("apng", "PNG")):
+            source = self.root / f"source.{native}"
+            with Image.new("RGBA", (32, 16), "red") as first, Image.new("RGBA", (32, 16), "blue") as second:
+                first.save(source, encoder, save_all=True, append_images=[second], duration=[100, 200], loop=0, lossless=True)
+            original = source.read_bytes()
+            inspected = replace(picture(animated=True), image_data=original, image_extension=native)
+            options = available_download_conversions(inspected, "image", max_height=8)
+            self.assertTrue({"gif", "webp", "apng"}.issubset(options), options)
+            for target in ("gif", "webp", "apng"):
+                with self.subTest(source=native, target=target):
+                    output = self.root / f"resized-{native}.{target}"
+                    self.assertTrue(convert_downloaded_file(source, target, output, inspected=inspected, kind="image", max_height=8))
+                    with Image.open(output) as image:
+                        self.assertEqual(image.size, (16, 8))
+                        self.assertEqual(image.n_frames, 2)
+                        self.assertEqual(image.info.get("loop"), 0)
+                        duration = 0
+                        for index in range(image.n_frames):
+                            image.seek(index)
+                            image.load()
+                            duration += image.info["duration"]
+                        self.assertAlmostEqual(duration, 300, delta=1)
+            self.assertEqual(source.read_bytes(), original)
 
     def test_video_and_social_animation_downloads_share_real_animation_encoders_resize_and_cache(self):
         tools = find_ffmpeg()
@@ -270,7 +382,7 @@ class DownloadConversionPipelineTests(unittest.TestCase):
         source.write_bytes(inspected.image_data)
         with patch("universal_downloader.local_media._tools", side_effect=DownloadError("no tools")):
             options = available_download_conversions(inspected, "image", max_height=8)
-            self.assertEqual(set(options), {"gif"})
+            self.assertEqual(set(options), {"gif", "webp", "apng"})
             output = self.root / "resized.gif"
             self.assertTrue(convert_downloaded_file(source, "gif", output, inspected=inspected, kind="image", max_height=8))
         with Image.open(output) as result:

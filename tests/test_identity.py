@@ -166,6 +166,15 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(media_identity(legacy, inspected, "image", None).key,
                          media_identity(desktop, inspected, "image", None).key)
 
+    def test_desktop_av_encoder_profiles_do_not_reuse_cli_conversions(self):
+        inspected = MediaInspection("https://example.com/video", {"id": "clip", "ext": "mp4"}, ("video", "audio"))
+        for kind, target in (("video", "mp4"), ("video", "mkv"), ("audio", "mp3"), ("audio", "wav")):
+            with self.subTest(target=target):
+                cli = DownloadRequest(inspected.url, kind, self.output, target)
+                desktop = DownloadRequest(inspected.url, kind, self.output, target, desktop_conversion=True)
+                self.assertNotEqual(media_identity(cli, inspected, kind, target).key, media_identity(desktop, inspected, kind, target).key)
+                self.assertEqual(media_identity(cli, inspected, kind, None).key, media_identity(desktop, inspected, kind, None).key)
+
     def test_resolved_page_identity_is_shared_with_a_google_wrapper(self):
         direct = self.inspected()
         wrapper = self.inspected("https://www.google.com/imgres?imgurl=anything", page_url=direct.url)

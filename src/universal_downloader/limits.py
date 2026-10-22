@@ -13,6 +13,7 @@ from PIL import Image, UnidentifiedImageError
 
 from .errors import DownloadError
 from .dependencies import hidden_process_options
+from .media_geometry import analyze as analyze_geometry
 
 
 def validate_limits(max_height: int | None, max_size: int | None) -> None:
@@ -62,46 +63,65 @@ def _context(formats: list[dict]) -> dict:
     }
 
 
+def _source_candidates(formats, specification, kind, information, *, max_height, max_size, allow_resize):
+    """One metadata policy for checked options and actual source selection."""
+    formats = [item for item in formats if not item.get("has_drm") and item.get("ext") != "mhtml" and item.get("protocol") != "mhtml"]
+    if max_size is not None:
+        formats = [item for item in formats if (item.get("protocol") or urlsplit(item.get("url", "")).scheme) in ("http", "https", "http_dash_segments", "http_dash_segments_generator", "ism")]
+        if not formats or any(information.get(field) is not None for field in ("section_start", "section_end")):
+            raise DownloadError("--max-size cannot monitor this streaming protocol. Remove --max-size for this URL.")
+    if max_height is not None:
+        bounded = [item for item in formats if item.get("vcodec") == "none" or (_height(item, information) is not None and _height(item, information) <= max_height)]
+        # An explicit conversion can resize, but still prefers a bounded source.
+        tiers = [bounded, formats] if allow_resize else [bounded]
+    else:
+        tiers = [formats]
+    for tier in tiers:
+        audio = [item for item in tier if item.get("vcodec") == "none" and item.get("acodec") != "none"]
+        video = [item for item in tier if item.get("vcodec") != "none" and item.get("acodec") == "none"]
+        combined = [item for item in tier if item.get("vcodec") != "none" and item.get("acodec") != "none"]
+        if kind == "audio":
+            candidates = ((item,) for item in chain(reversed(audio), reversed(combined)))
+        elif specification == "bestvideo/best":
+            candidates = ((item,) for item in chain(reversed(video), reversed(combined)))
+        else:
+            # Never drop an audio track just to satisfy a byte limit.
+            silent = () if any(item.get("acodec") != "none" for item in formats) else reversed(video)
+            candidates = chain(
+                ((v, a) for v in reversed(video) for a in reversed(audio)),
+                ((item,) for item in reversed(combined)),
+                ((item,) for item in silent),
+            )
+        for candidate in candidates:
+            if max_size is None or sum(_size(item) or 0 for item in candidate) <= max_size:
+                yield candidate
+
+
+def validate_download_source_limits(inspected, kind, *, target, max_height, max_size):
+    """Hide checked outputs that cannot satisfy known source constraints."""
+    validate_inspected_limits(inspected, kind, target=target, max_height=max_height, max_size=max_size)
+    if (max_height is None and max_size is None) or (kind == "image" and not inspected.animation_video):
+        return
+    kind = "video" if inspected.animation_video else kind
+    specification = ("bestaudio/best" if kind == "audio" else "bestvideo/best" if inspected.animation_video
+                     or target in ("gif", "webp", "apng") else "bestvideo+bestaudio/best/bestvideo")
+    candidates = _source_candidates(inspected.information.get("formats") or [inspected.information], specification, kind,
+                                    inspected.information, max_height=max_height, max_size=max_size, allow_resize=bool(target))
+    if next(candidates, None) is None:
+        raise DownloadError("No available source meets the requested --max-height or --max-size limits. Increase or remove the limit.")
+
+
 def limited_format_selector(downloader, specification: str, kind: str, information: dict, *, max_height: int | None, max_size: int | None, allow_resize: bool = False):
     """Keep yt-dlp's native merging while budgeting all selected source streams."""
     selector = downloader.build_format_selector(specification)
 
     def select(context):
-        formats = [item for item in context["formats"] if not item.get("has_drm") and item.get("ext") != "mhtml" and item.get("protocol") != "mhtml"]
-        if max_size is not None:
-            formats = [item for item in formats if (item.get("protocol") or urlsplit(item.get("url", "")).scheme) in ("http", "https", "http_dash_segments", "http_dash_segments_generator", "ism")]
-            if not formats or any(information.get(field) is not None for field in ("section_start", "section_end")):
-                raise DownloadError("--max-size cannot monitor this streaming protocol. Remove --max-size for this URL.")
-        if max_height is not None:
-            bounded = [item for item in formats if item.get("vcodec") == "none" or (_height(item, information) is not None and _height(item, information) <= max_height)]
-            # An explicitly selected conversion may resize an otherwise
-            # unavailable height. Still prefer bounded source renditions.
-            tiers = [bounded, formats] if allow_resize else [bounded]
-        else:
-            tiers = [formats]
-        for tier in tiers:
-            audio = [item for item in tier if item.get("vcodec") == "none" and item.get("acodec") != "none"]
-            video = [item for item in tier if item.get("vcodec") != "none" and item.get("acodec") == "none"]
-            combined = [item for item in tier if item.get("vcodec") != "none" and item.get("acodec") != "none"]
-            if kind == "audio":
-                candidates = ((item,) for item in reversed(audio or combined))
-            elif specification == "bestvideo/best":
-                candidates = ((item,) for item in chain(reversed(video), reversed(combined)))
-            else:
-                # Never drop a real audio track just to satisfy a byte limit.
-                silent = () if any(item.get("acodec") != "none" for item in formats) else reversed(video)
-                candidates = chain(
-                    ((v, a) for v in reversed(video) for a in reversed(audio)),
-                    ((item,) for item in reversed(combined)),
-                    ((item,) for item in silent),
-                )
-            for candidate in candidates:
-                if max_size is not None and sum(_size(item) or 0 for item in candidate) > max_size:
-                    continue
-                selected = list(selector(_context(list(candidate))))
-                if selected:
-                    yield selected[0]
-                    return
+        for candidate in _source_candidates(context["formats"], specification, kind, information,
+                                             max_height=max_height, max_size=max_size, allow_resize=allow_resize):
+            selected = list(selector(_context(list(candidate))))
+            if selected:
+                yield selected[0]
+                return
         raise DownloadError("No available source meets the requested --max-height or --max-size limits. Increase or remove the limit.")
 
     return select
@@ -148,9 +168,9 @@ def validate_file_limits(path: Path, *, max_size: int | None, max_height: int | 
             raise DownloadError("FFmpeg and ffprobe are required to verify --max-height. Run install.cmd.")
         executable = ffmpeg / ("ffprobe.exe" if (ffmpeg / "ffprobe.exe").is_file() else "ffprobe")
         try:
-            result = subprocess.run([str(executable), "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height", "-of", "json", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, check=True, **hidden_process_options())
+            result = subprocess.run([str(executable), "-v", "error", "-select_streams", "V:0", "-show_streams", "-of", "json", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, check=True, **hidden_process_options())
             streams = json.loads(result.stdout).get("streams") or []
-            height = streams[0].get("height") if streams else None
+            height = analyze_geometry(streams[0]).display_height if streams else None
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             raise DownloadError("Could not verify the completed media height for --max-height.") from error
     if not isinstance(height, (int, float)) or not math.isfinite(height) or height <= 0:

@@ -1,0 +1,15 @@
+{
+  "files": [
+    "build-inputs.json",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "index.html",
+    "tsconfig.json",
+    "vite.config.ts",
+    "tailwind.config.ts",
+    "postcss.config.js",
+    "SHADCN-LICENSE.txt"
+  ],
+  "directories": ["src", "scripts", "licenses"]
+}

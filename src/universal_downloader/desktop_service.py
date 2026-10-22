@@ -21,10 +21,10 @@ from PIL import Image, ImageOps
 from . import __version__
 from .desktop_download_formats import available_download_conversions
 from .dependencies import PROJECT_ROOT, find_ffmpeg, find_js_runtime
-from .desktop_queue_store import DesktopQueueStore, RESTORED_MESSAGE, selection_descriptor, selection_identity
+from .desktop_queue_store import DesktopQueueStore, RESTORED_MESSAGE, conversion_background, selection_descriptor, selection_identity
 from .desktop_worker import ProcessWorker
 from .errors import DownloadError
-from .limits import validate_inspected_limits, validate_limits
+from .limits import validate_download_source_limits, validate_limits
 from .preferences import load_preferences, save_preferences
 from .queue import MAX_BATCH_BYTES, MAX_QUEUE_URLS, MAX_URL_LENGTH, validated_urls
 from .resume import pending_resumes
@@ -123,7 +123,7 @@ def _asset_options(inspected, settings):
         height = _height(settings, inspected, kind)
         options = []
         try:
-            validate_inspected_limits(inspected, kind, target=None, max_height=height, max_size=settings["max_size"])
+            validate_download_source_limits(inspected, kind, target=None, max_height=height, max_size=settings["max_size"])
         except DownloadError:
             pass
         else:
@@ -131,12 +131,13 @@ def _asset_options(inspected, settings):
             options.append({"id": "original", "label": "Original", "description": f"Keep the source format{f' ({extension.upper()})' if extension else ''}.", "recommended": True})
         for target, description in available_download_conversions(inspected, kind, max_height=height).items():
             try:
-                validate_inspected_limits(inspected, kind, target=target, max_height=height, max_size=settings["max_size"])
+                validate_download_source_limits(inspected, kind, target=target, max_height=height, max_size=settings["max_size"])
             except DownloadError:
                 continue
             category = ("audio" if target in audio else "video" if target in video else
                         "animation" if (inspected.animated or kind == "video") and target in ("gif", "webp", "apng") else "image")
-            label = f"{names.get(target, target.upper())} {category}"
+            native_av = target == inspected.original_extension(kind) and (kind in ("video", "audio") or inspected.animation_video)
+            label = f"{names.get(target, target.upper())} {'compatibility' if native_av else category}"
             options.append({"id": target, "label": label, "description": description, "recommended": False})
         if options:
             kinds.append({"id": kind, "label": inspected.labels[kind], "options": options})
@@ -369,7 +370,7 @@ class DesktopService:
                 for (identifier, source), image in zip(sources, result):
                     # Only a fixed metadata schema crosses the native bridge.
                     public = {key: image.get(key) for key in ("format", "width", "height", "size", "transparent", "targets", "error",
-                                                             "media_type", "duration", "animated", "pages", "has_audio", "target_notes", "requires_tools")}
+                                                             "media_type", "duration", "animated", "pages", "has_audio", "target_notes", "requires_tools", "background_targets")}
                     public.update(id=identifier, name=_text(Path(source).name, 300))
                     files.append(public)
                     if not image.get("error"):
@@ -433,7 +434,7 @@ class DesktopService:
             # Background only affects outputs with reduced alpha. Irrelevant
             # settings must not make two identical conversions distinct.
             identities = [("convert", image["source"], image["signature"], target,
-                           background if target in ("jpg", "bmp", "gif", "mp4") and image["transparent"] else None, settings["output"]) for image in records]
+                           conversion_background(image, target, background), settings["output"]) for image in records]
             active = [task["_identity"] for task in self._tasks if task["status"] not in TERMINAL]
             additions = [(image, identity) for image, identity in zip(records, identities) if identity not in active]
             if len(self._tasks) + len(additions) > MAX_QUEUE_URLS:

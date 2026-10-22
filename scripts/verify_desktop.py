@@ -144,6 +144,70 @@ def verify_download_formats(service, sources, video, ffprobe):
         thread.join(timeout=5)
 
 
+def verify_media_fidelity(service, api, root, ffmpeg, ffprobe):
+    """Exercise timestamp and display metadata through the actual worker protocol."""
+    fixtures = root / "fidelity"
+    fixtures.mkdir()
+    animation = fixtures / "Variable.apng"
+    frames = [Image.new("RGB", (40, 20), color) for color in ("red", "blue", "green", "yellow")]
+    try:
+        frames[0].save(animation, "PNG", save_all=True, append_images=frames[1:], duration=[40, 160, 80, 120], loop=0)
+    finally:
+        for frame in frames:
+            frame.close()
+
+    def convert(source, target):
+        require(api.clear_conversion_files())
+        service.add_conversion_files([str(source)])
+        state = wait_for(service, lambda value: value["conversion"]["status"] != "checking")
+        selected = state["conversion"]["files"][0]
+        assert selected["error"] is None and target in selected["targets"], selected
+        require(api.enqueue_conversions([selected["id"]], target))
+        state = wait_for(service, lambda value: value["tasks"][-1]["status"] in ("completed", "failed"))
+        task = state["tasks"][-1]
+        assert task["status"] == "completed", task
+        return selected, Path(task["path"])
+
+    def probe(source):
+        result = subprocess.run([str(ffprobe), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(source)],
+                                capture_output=True, text=True, timeout=20, check=True, **hidden_process_options())
+        return json.loads(result.stdout)
+
+    digest = sha256(animation.read_bytes()).hexdigest()
+    _selected, video = convert(animation, "mp4")
+    assert abs(float(probe(video)["format"]["duration"]) - .4) < .001
+    _selected, restored = convert(video, "apng")
+    with Image.open(restored) as image:
+        timing = []
+        for index in range(image.n_frames):
+            image.seek(index)
+            image.load()
+            timing.append(image.info["duration"])
+        assert timing == [40, 160, 80, 120], timing
+    assert sha256(animation.read_bytes()).hexdigest() == digest
+
+    coded, rotated = fixtures / "Coded.mp4", fixtures / "Rotated.mp4"
+    subprocess.run([str(ffmpeg), "-hide_banner", "-loglevel", "error", "-nostdin", "-n", "-f", "lavfi", "-i",
+                    "testsrc=size=40x20:rate=10:duration=0.3", "-vf", "setsar=2", "-c:v", "libx264", "-pix_fmt", "yuv444p",
+                    "-threads", "1", str(coded)], capture_output=True, timeout=30, check=True, **hidden_process_options())
+    help_text = subprocess.run([str(ffmpeg), "-hide_banner", "-h", "full"], capture_output=True,
+                               text=True, timeout=20, **hidden_process_options()).stdout
+    if "-display_rotation" in help_text:
+        arguments = ["-display_rotation:v:0", "90", "-i", str(coded), "-c", "copy"]
+    else:
+        arguments = ["-i", str(coded), "-c", "copy", "-metadata:s:v:0", "rotate=90"]
+    subprocess.run([str(ffmpeg), "-hide_banner", "-loglevel", "error", "-nostdin", "-n", *arguments, str(rotated)],
+                   capture_output=True, timeout=30, check=True, **hidden_process_options())
+    digest = sha256(rotated.read_bytes()).hexdigest()
+    selected, normalized = convert(rotated, "mp4")
+    assert (selected["width"], selected["height"]) == (20, 80), selected
+    stream = probe(normalized)["streams"][0]
+    assert (stream["width"], stream["height"]) == (20, 80) and stream["sample_aspect_ratio"] == "1:1", stream
+    assert not any(item.get("rotation") for item in stream.get("side_data_list", [])), stream
+    assert sha256(rotated.read_bytes()).hexdigest() == digest
+    print("Desktop fidelity passed: variable frame delays and rotated anamorphic video through real contained workers.", flush=True)
+
+
 def verify(executable: Path | None = None):
     previous_state = os.environ.get("UNIDOWN_DATA_DIR")
     with tempfile.TemporaryDirectory(prefix="media-toolkit-desktop-check-") as temporary, worker_executable(executable):
@@ -368,6 +432,7 @@ def verify(executable: Path | None = None):
             assert all(path.is_file() for path in completed)
             if tools is not None:
                 verify_download_formats(service, sources, video, ffprobe)
+                verify_media_fidelity(service, api, root, ffmpeg, ffprobe)
                 assert all(sha256(file.read_bytes()).hexdigest() == digest for file, digest in originals.items())
             av_result = "two-frame animation MP4 timing, MP4 audio extraction and WebM conversion, " if video is not None else ""
             print("Desktop workers passed: content inspection, AVIF/BMP/TIFF/ICO/GIF/JP2/TGA roundtrips, HEIC decoding, animation preservation, " + av_result + "packet-preserving remux, saved queue recovery with explicit Retry, atomic batch validation, JPEG background, lossless WebP, cancel/retry, completed-file shortcut, source preservation and private workspace cleanup.", flush=True)

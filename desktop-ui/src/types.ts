@@ -11,7 +11,8 @@ export interface LocalFile {
   id: string; name: string; format: string | null; width: number | null; height: number | null;
   size: number | null; transparent: boolean; targets: ConversionFormat[]; error: string | null;
   media_type?: 'image' | 'audio' | 'video' | 'animation'; duration?: number | null; animated?: boolean;
-  pages?: number; has_audio?: boolean; target_notes?: Record<string, string>; requires_tools?: boolean
+  pages?: number; has_audio?: boolean; target_notes?: Record<string, string>; requires_tools?: boolean;
+  background_targets?: ConversionFormat[]
 }
 export type LocalImage = LocalFile
 export interface Conversion {

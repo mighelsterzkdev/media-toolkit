@@ -14,7 +14,8 @@ import ssl
 import subprocess
 import sys
 import tempfile
-from urllib.error import URLError
+import time
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -64,9 +65,41 @@ def verify_heif_binaries(directory: Path) -> None:
         raise RuntimeError("The portable bundle unexpectedly includes an HEVC encoder.")
 
 
+def _download_source(record, cached):
+    """Fetch an exact pinned source with bounded bytes and transient retries."""
+    import certifi
+
+    partial = cached.with_suffix(cached.suffix + ".partial")
+    for attempt in range(3):
+        try:
+            digest, total = hashlib.sha256(), 0
+            request = Request(record["url"], headers={"User-Agent": "Media-Toolkit-release-builder"})
+            with urlopen(request, timeout=60, context=ssl.create_default_context(cafile=certifi.where())) as response, partial.open("wb") as output:
+                while chunk := response.read(1_048_576):
+                    total += len(chunk)
+                    if total > record["size"]:
+                        raise RuntimeError(f"The source archive exceeds its pinned size: {record['filename']}")
+                    output.write(chunk)
+                    digest.update(chunk)
+            if total != record["size"] or digest.hexdigest() != record["sha256"]:
+                raise RuntimeError(f"The source archive failed its size or SHA-256 check: {record['filename']}")
+            partial.replace(cached)
+            return
+        except (OSError, URLError) as error:
+            transient = (isinstance(error, HTTPError) and error.code in (408, 429, 500, 502, 503, 504)
+                         or isinstance(error, (TimeoutError, ConnectionError))
+                         or isinstance(error, URLError) and not isinstance(error, HTTPError) and not isinstance(error.reason, ssl.SSLError))
+            if transient and attempt < 2:
+                time.sleep(attempt + 1)
+                continue
+            detail = f"HTTP {error.code}" if isinstance(error, HTTPError) else type(error).__name__
+            raise RuntimeError(f"Could not retrieve the pinned source archive {record['filename']} ({detail}).") from error
+        finally:
+            partial.unlink(missing_ok=True)
+
+
 def write_heif_sources(destination: Path) -> None:
     """Ship the decoder sources and notices with the independent shared DLLs."""
-    import certifi
 
     notices = ROOT / "third_party" / "pi-heif"
     records = json.loads((notices / "SOURCES.json").read_text(encoding="utf-8"))
@@ -85,18 +118,7 @@ def write_heif_sources(destination: Path) -> None:
         if not cached.is_file() and legacy.is_file() and _checksum(legacy) == record["sha256"]:
             shutil.copyfile(legacy, cached)
         if not cached.is_file() or _checksum(cached) != record["sha256"]:
-            partial = cached.with_suffix(cached.suffix + ".partial")
-            try:
-                request = Request(record["url"], headers={"User-Agent": "Media-Toolkit-release-builder"})
-                with urlopen(request, timeout=60, context=ssl.create_default_context(cafile=certifi.where())) as response, partial.open("wb") as output:
-                    shutil.copyfileobj(response, output)
-                if _checksum(partial) != record["sha256"]:
-                    raise RuntimeError(f"The HEIF source archive checksum did not match: {record['filename']}")
-                partial.replace(cached)
-            except (OSError, URLError) as error:
-                raise RuntimeError(f"Could not retrieve the pinned HEIF source archive: {record['filename']}") from error
-            finally:
-                partial.unlink(missing_ok=True)
+            _download_source(record, cached)
         shutil.copyfile(cached, target / cached.name)
 
 

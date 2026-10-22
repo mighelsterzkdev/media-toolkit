@@ -13,6 +13,7 @@ from PIL import Image, UnidentifiedImageError
 from .errors import DownloadError
 from .dependencies import hidden_process_options
 from .formats import MEDIA_TYPES
+from .media_geometry import analyze as analyze_geometry
 
 
 @dataclass(frozen=True)
@@ -142,7 +143,14 @@ def inspect_streams(information: dict, ffmpeg: Path | None, cookiejar=None) -> t
                 source["vcodec"] = (video_stream.get("codec_name") or "unidentified") if video_stream else "none"
                 source["acodec"] = (audio_stream.get("codec_name") or "unidentified") if audio_stream else "none"
                 if video_stream:
-                    source.update(width=video_stream.get("width"), height=video_stream.get("height"))
+                    try:
+                        geometry = analyze_geometry(video_stream)
+                        source.update(width=geometry.display_width, height=geometry.display_height)
+                    except DownloadError:
+                        # Keep playable originals available when a probe cannot
+                        # interpret their display transform. An explicit height
+                        # limit must not trust coded dimensions in that case.
+                        source.update(width=None, height=None)
                 if not information.get("duration"):
                     try:
                         information["duration"] = float(metadata.get("format", {}).get("duration", 0)) or None

@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts import build_windows
+from scripts.frontend_assets import verify_frontend_assets
 
 DESKTOP_PACKAGES = ("pywebview", "pythonnet", "clr-loader", "cffi", "pycparser", "bottle", "proxy-tools", "typing-extensions")
 
@@ -68,8 +69,7 @@ def write_desktop_notices(destination: Path) -> None:
 def build(output: Path) -> Path:
     from universal_downloader import __version__
     assets = ROOT / "src/universal_downloader/desktop_assets"
-    if not (assets / "index.html").is_file():
-        raise RuntimeError("Build the desktop frontend before packaging.")
+    verify_frontend_assets(ROOT)
     # Keep separate library directories: Python's base_library.zip is derived
     # from each entry point and cannot safely be overwritten by another build.
     archive = build_windows.build(output)

@@ -293,11 +293,6 @@ def _download_original(url, kind, output_dir, inspected, progress_hook, logger, 
     source_tag = ".source" if kind == "audio" else ""
     max_size = getattr(request, "max_size", None)
     max_height = getattr(request, "max_height", None)
-    if (max_height is not None and getattr(request, "desktop_conversion", False)
-            and getattr(request, "convert_to", None) in ("mkv", "mov", "webm")):
-        # These shared video outputs pad to even pixels without resizing.
-        # Select a bounded source that still fits after that padding.
-        max_height -= max_height % 2
     def report(status):
         if resume_work:
             resume_work.progress(status)
@@ -327,7 +322,7 @@ def _download_original(url, kind, output_dir, inspected, progress_hook, logger, 
                     downloader, options["format"], "video" if inspected.animation_video else kind,
                     inspected.information, max_height=max_height, max_size=max_size,
                     allow_resize=bool(getattr(request, "convert_to", None)) and
-                    (not getattr(request, "desktop_conversion", False) or request.convert_to in ("mp4", "gif", "webp", "apng")),
+                    (not getattr(request, "desktop_conversion", False) or request.convert_to in ("mp4", "mkv", "mov", "webm", "gif", "webp", "apng")),
                 )
             for cookie in inspected.cookies:
                 downloader.cookiejar.set_cookie(deepcopy(cookie))

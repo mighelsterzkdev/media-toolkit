@@ -329,6 +329,49 @@ class LocalConversionTests(unittest.TestCase):
                     convert_local_image(checked, "ico", self.output)
         self.assertFalse(self.output.exists())
 
+    def test_encoder_edge_boundaries_are_checked_before_offering_wide_or_tall_images(self):
+        available = self.inspected(self.image())['targets']
+        limits = {"webp": 16_383, "jpg": 65_500, "gif": 65_535, "tga": 65_535, "avif": 32_768}
+        for target, limit in limits.items():
+            if target not in available:
+                continue  # Keep testing independent builds without optional codecs.
+            for axis in (0, 1):
+                with self.subTest(target=target, axis=axis):
+                    size = (limit, 1) if axis == 0 else (1, limit)
+                    source = self.image(f"at-{target}-{axis}.png", mode="RGB", color="red", size=size)
+                    checked = self.inspected(source)
+                    self.assertIn(target, checked["targets"])
+                    converted = convert_local_image(checked, target, self.output)
+                    with Image.open(converted) as image:
+                        image.load()
+                        self.assertEqual(image.size, size)
+                    self.assertIsNone(self.inspected(converted)["error"])
+
+                    larger = (limit + 1, 1) if axis == 0 else (1, limit + 1)
+                    source = self.image(f"over-{target}-{axis}.png", mode="RGB", color="red", size=larger)
+                    original = source.read_bytes()
+                    checked = self.inspected(source)
+                    self.assertNotIn(target, checked["targets"])
+                    before = set(self.output.iterdir())
+                    with self.assertRaisesRegex(DownloadError, "compatible output format"):
+                        convert_local_image(checked, target, self.output)
+                    self.assertEqual(set(self.output.iterdir()), before)
+                    self.assertEqual(source.read_bytes(), original)
+        self.assert_clean()
+
+    def test_extreme_aspect_ratio_keeps_outputs_that_can_represent_its_original_size(self):
+        source = self.image("wide.bmp", format="BMP", mode="RGB", color="red", size=(65_536, 1))
+        checked = self.inspected(source)
+        self.assertFalse({"jpg", "webp", "gif", "tga", "avif", "ico"} & set(checked["targets"]))
+        self.assertIn("png", checked["targets"])
+        for target in checked["targets"]:
+            with self.subTest(target=target):
+                converted = convert_local_image(checked, target, self.output)
+                with Image.open(converted) as image:
+                    image.load()
+                    self.assertEqual(image.size, (65_536, 1))
+        self.assert_clean()
+
     def test_bmp_background_and_gif_transparent_palette_do_not_turn_black_opaque_pixels_transparent(self):
         source = self.root / "alpha.png"
         with Image.new("RGBA", (32, 32), (0, 0, 0, 255)) as image:
