@@ -5,15 +5,15 @@
     "build-inputs.json": "4bc54e00d6d32097229120c89f19806878fb712811f9afcbb0d7b91aedfa006a",
     "index.html": "5c608429cbddb172fc25dc3ca65a00501c889cde2d93ad7c9830753aa4f9b511",
     "licenses/react-remove-scroll-bar.txt": "fb5c42efb0f851322eefc4c44682bb38d57f364934dbb7bf3eacf39f6a412fff",
-    "package.json": "8638b3b31222aba97b7bea475ef8f53e4ac79a4dd80620e8e1ed26dbad7ca922",
+    "package.json": "c511be5d6532a190c0ad0470482955f9a05c70de18da3a10645aea84dcfa449d",
     "pnpm-lock.yaml": "265c2bfe3f07cc83af3e9995bda15c4839b5c600df1671cf60a4e120c728e774",
     "pnpm-workspace.yaml": "ac02d96368617c760f093cfe61fdec64b6244007ab3553e0d6621f706f54a353",
     "postcss.config.js": "45027a2befa94d6f46875c529d1088c12548d8f0bee31133e4ebb00ebc581e33",
     "scripts/build-manifest.mjs": "6173c1e5d01617bd8dece98d039742faf1c6d275cc1e4f6c53519b1a9b6fe22c",
     "scripts/copy-assets.mjs": "ace048639ca198aae5c14da92bb378b19b3b1747e23a16daf2ece8465700e452",
-    "src/App.tsx": "95fabb2691db21bbdf889952bb6634ed925135e02332535903f52b0c8f581a43",
+    "src/App.tsx": "140c02de4a642f0faee914c48d492578a17c1dde9521f53a4a8a0c93cd38a2ae",
     "src/components/BatchDialog.tsx": "33c24bceaf0617ff36be5001449c064ddd5974e439f3439f441ac57931520a03",
-    "src/components/ConvertPanel.tsx": "db8e6a45061707d6c00243c238a3e3c225232a542a26ddb522a6b8538cf27b62",
+    "src/components/ConvertPanel.tsx": "5a967b9f9e693d859184bec1a0d1cd887ae6ce06b2cb45475ca30cd1c8cf6498",
     "src/components/SaveDestination.tsx": "2d4c2f7cc0a53b0df98101c0b497a98c9027cff2d09976cd5140044774324ba4",
     "src/components/SettingsDialog.tsx": "67524a2701b12088b9d1b4f175bd57d52ced38dc9963b831a070ef89f82ed322",
     "src/components/TaskList.tsx": "d33c0f172a5129610bcc9b63393b04ced925242ce9ab3815dd0aaeb5383f7d6d",
@@ -29,7 +29,7 @@
     "src/format.ts": "b96419e59129a782f0fd8c1e94651d2396cb262795577e7c2f2a20cf2bc65290",
     "src/lib/utils.ts": "00708463d307471ed1a3ac36642e9c00a766730d7be61e2351f283a580017ea6",
     "src/main.tsx": "10ac689b4eb57228d6be39425516819110d59de99ccaff9eba6ab68ae07abcc3",
-    "src/styles.css": "4d4fd90b5a8141fc15c195611a12e56f196528ad37a2378712cdac4c1e4a5b34",
+    "src/styles.css": "fc0a734fcabdb08ab3436f906b010a1bd51bc2630560026591b5706a3e8c1c8f",
     "src/test/App.test.tsx": "d3857387955e8c6623800e90c4f5ffacc9d3d7385711fa7c2d5ddb3f440b9cc2",
     "src/test/ConvertPanel.test.tsx": "6587dbb35a482872efaa6a12092872b2b5f5fd2661b588d892a6d57de32421cd",
     "src/test/TaskList.test.tsx": "5c36effca879d13ad92dc0755d1c79f5ec69b33d1005a444584fa3caa1986914",
@@ -43,8 +43,8 @@
   },
   "outputs": {
     "THIRD-PARTY-NOTICES.txt": "88089f8dee14928daf24c40e60c6a4d847c9fbf9d776b2bd780ed7f17a724e43",
-    "assets/index-Bm8T_rIL.js": "e169a5cba0922aa674907aa6c7aad1ac9e9525c526c756dc6f03d9382c1eca7b",
-    "assets/index-jRQudLlj.css": "8deef0f124fd32cf045772d8e430c93cbb581e320197f0fc9e8005712040a68c",
-    "index.html": "e9f72ae611a79c327b8630d95a89899558b48704c66c917ff175a155bd0ff713"
+    "assets/index-C4wO0Riy.js": "452d75414e6c21d67022cbf7ed855afcd91cae0dd7eab8d62dbfce92b4f35b26",
+    "assets/index-znWquL61.css": "3437dde210b5fa309a881a86af83220bcd6beefc052f061796558c3a942c5fd1",
+    "index.html": "12be550055b6dbdaf2688bb132f60a5743a4165e0db7f4c395cadd63e0465003"
   }
 }

@@ -116,7 +116,7 @@ export default function App() {
         {ready && asset ? <div className="inspected-result">
           <div className="media-summary">
             {asset.thumbnail && thumbnailPattern.test(asset.thumbnail) ? <img className="media-thumbnail" src={asset.thumbnail} alt="" /> : <div className="media-thumbnail media-placeholder"><Icon className="size-7" aria-hidden="true" /></div>}
-            <div className="media-description"><span className="source-name">{sourceHost(normalizedUrl)}</span><h3 title={asset.title}>{asset.title}</h3>{asset.description ? <p>{asset.description}</p> : null}</div>
+            <div className="media-description"><span className="source-name" title={sourceHost(normalizedUrl)}>{sourceHost(normalizedUrl)}</span><h3 title={asset.title}>{asset.title}</h3>{asset.description ? <p>{asset.description}</p> : null}</div>
           </div>
           {kind && option ? <div className="download-options">
             <RadioGroup value={kind.id} onValueChange={changeKind} aria-label="Media type" orientation="horizontal" className="kind-options flex flex-wrap gap-2">

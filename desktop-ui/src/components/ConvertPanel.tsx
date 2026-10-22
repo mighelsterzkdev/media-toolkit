@@ -166,7 +166,7 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
         : 'Choose an output format before converting this selection.'}</p>
       {targetNotes.map(note => <p key={note} className="field-help">{note}</p>)}
       {needsTools ? <p className="field-help">Install FFmpeg to convert this selection.</p> : null}
-      {flattensAlpha && target ? <div className="alpha-background"><Label>{formatName(target)} background</Label>
+      {flattensAlpha && target ? <div className="alpha-background"><Label>Background</Label>
         <RadioGroup value={background} onValueChange={value => setBackground(value as '#FFFFFF' | '#000000')} aria-label={`${formatName(target)} background`} orientation="horizontal" className="flex flex-wrap gap-6">
           <Label htmlFor="background-white" className="background-choice"><RadioGroupItem id="background-white" value="#FFFFFF" disabled={busy} />White</Label>
           <Label htmlFor="background-black" className="background-choice"><RadioGroupItem id="background-black" value="#000000" disabled={busy} />Black</Label>
