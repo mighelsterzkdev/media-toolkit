@@ -402,7 +402,7 @@ def main() -> int:
         import webview
         from .desktop_service import DesktopService
     except ImportError:
-        _fatal("The desktop dependencies are missing. Run install.cmd or update.cmd, then open start.cmd again.")
+        _fatal("The desktop dependencies are missing. Run scripts/install.cmd or scripts/update.cmd, then open start.cmd again.")
         return 1
     if not (ASSETS / "index.html").is_file():
         _fatal("The desktop interface is missing. Extract the complete release or update the source checkout.")
@@ -448,7 +448,7 @@ def main() -> int:
         webview.start(gui="edgechromium" if os.name == "nt" else None, debug=False, private_mode=True, storage_path=str(storage))
         return 0
     except Exception:
-        _fatal("The desktop window could not start. On Windows, install Microsoft Edge WebView2 Runtime from https://developer.microsoft.com/microsoft-edge/webview2/ and run update.cmd. The terminal remains available through start-cli.cmd.")
+        _fatal("The desktop window could not start. On Windows, install Microsoft Edge WebView2 Runtime from https://developer.microsoft.com/microsoft-edge/webview2/ and run scripts/update.cmd. See the README for terminal commands.")
         return 1
     finally:
         if service is not None:

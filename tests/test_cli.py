@@ -483,7 +483,7 @@ class CliTests(unittest.TestCase):
     @patch("universal_downloader.cli.find_js_runtime", return_value=None)
     def test_doctor_reports_missing_tools(self, runtime, ffmpeg):
         self.assertEqual(main(["--doctor"]), 1)
-        self.assertIn("install.cmd", self.output.getvalue())
+        self.assertIn("scripts/install.cmd", self.output.getvalue())
 
     @patch("universal_downloader.cli.find_ffmpeg", return_value=Path("."))
     @patch("universal_downloader.cli.find_js_runtime", return_value=("node", Path("node.exe")))
@@ -499,7 +499,7 @@ class CliTests(unittest.TestCase):
     def test_frozen_doctor_points_to_complete_release_instead_of_source_installer(self, runtime, ffmpeg):
         self.assertEqual(main(["--doctor"]), 1)
         self.assertIn("unidown.exe --install-tools", self.output.getvalue())
-        self.assertNotIn("Run install.cmd", self.output.getvalue())
+        self.assertNotIn("scripts/install.cmd", self.output.getvalue())
 
     def batch_file(self, contents):
         path = Path(self.preferences_folder.name) / "links.txt"

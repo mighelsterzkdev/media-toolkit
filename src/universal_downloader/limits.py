@@ -165,7 +165,7 @@ def validate_file_limits(path: Path, *, max_size: int | None, max_height: int | 
             height = image.height
     except (UnidentifiedImageError, OSError, ValueError):
         if ffmpeg is None:
-            raise DownloadError("FFmpeg and ffprobe are required to verify --max-height. Run install.cmd.")
+            raise DownloadError("FFmpeg and ffprobe are required to verify --max-height. Run scripts/install.cmd.")
         executable = ffmpeg / ("ffprobe.exe" if (ffmpeg / "ffprobe.exe").is_file() else "ffprobe")
         try:
             result = subprocess.run([str(executable), "-v", "error", "-select_streams", "V:0", "-show_streams", "-of", "json", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, check=True, **hidden_process_options())

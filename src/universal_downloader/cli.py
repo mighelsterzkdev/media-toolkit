@@ -404,7 +404,7 @@ def _doctor() -> int:
             if issues:
                 print("Extract the complete Windows release again to restore its bundled dependencies.")
         else:
-            print("Run install.cmd on Windows or see the manual installation steps in the README.")
+            print("Run scripts/install.cmd on Windows or see the manual installation steps in the README.")
         return 1
     print("Dependencies found.")
     return 0

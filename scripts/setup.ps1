@@ -1,8 +1,9 @@
 param([string]$Python)
 
 $ErrorActionPreference = 'Stop'
-Set-Location -LiteralPath $PSScriptRoot
-$venvPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
+$projectRoot = Split-Path -Parent $PSScriptRoot
+Set-Location -LiteralPath $projectRoot
+$venvPython = Join-Path $projectRoot '.venv\Scripts\python.exe'
 
 try {
     if (-not (Test-Path -LiteralPath $venvPython)) {
@@ -26,7 +27,7 @@ try {
             throw 'Install Python 3.10+ from https://www.python.org/downloads/ and try again. Select Add Python to PATH.'
         }
         Write-Host 'Creating a local Python environment...'
-        & $pythonCommand @pythonArguments -m venv (Join-Path $PSScriptRoot '.venv')
+        & $pythonCommand @pythonArguments -m venv (Join-Path $projectRoot '.venv')
         if ($LASTEXITCODE -ne 0) { throw 'Could not create the Python environment.' }
     }
     & $venvPython -m pip install --upgrade pip
@@ -35,7 +36,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not install Python dependencies.' }
     & $venvPython -B -m universal_downloader.compatibility
     if ($LASTEXITCODE -ne 0) { throw 'The installed dependencies do not match this tested release.' }
-    & $venvPython -B -X utf8 (Join-Path $PSScriptRoot 'scripts\install_tools.py')
+    & $venvPython -B -X utf8 (Join-Path $PSScriptRoot 'install_tools.py')
     if ($LASTEXITCODE -ne 0) { throw 'Could not install the download tools.' }
     & $venvPython -B -X utf8 -m universal_downloader --doctor
     if ($LASTEXITCODE -ne 0) { throw 'Some dependencies are still missing.' }

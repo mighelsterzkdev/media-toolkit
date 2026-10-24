@@ -100,7 +100,6 @@ def build(output: Path) -> Path:
         shutil.copyfile(executable, bundle / executable.name)
         shutil.copytree(executable.parent / "_desktop", bundle / "_desktop")
     write_desktop_notices(bundle / "licenses")
-    shutil.copyfile(bundle / "start.cmd", bundle / "start-cli.cmd")
     (bundle / "start.cmd").write_text(
         '@echo off\nsetlocal\ncd /d "%~dp0"\n'
         'if "%~1"=="" (\n    start "" "%~dp0media-toolkit.exe"\n    exit /b 0\n)\n'
@@ -124,7 +123,7 @@ def build(output: Path) -> Path:
         "Use the queue for several links. Nothing starts until you explicitly add downloads.\n"
         "Click Install tools if needed to prepare checksum-pinned FFmpeg/Deno archives from their publishers.\n"
         "Downloads default to downloads/ beside this program. Settings persist in local application data.\n\n"
-        "Open start-cli.cmd or run unidown.exe --help for the terminal interface.\n"
+        "Run unidown.exe --help for the optional terminal interface.\n"
         "CLI examples: unidown.exe --doctor | unidown.exe --batch links.txt | unidown.exe --version\n"
         "Prepare tools from a terminal: unidown.exe --install-tools\n"
         "To update, extract a newer complete release. Do not replace only an EXE.\n"

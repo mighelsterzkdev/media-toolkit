@@ -59,7 +59,7 @@ def validate_conversion(inspected: MediaInspection, kind: str, target: str, *, m
         if not math.isfinite(duration) or not 0 < duration <= MAX_GIF_SECONDS:
             raise DownloadError(f"GIF conversion supports animations with a duration of up to {MAX_GIF_SECONDS} seconds. Keep the original for other animations.")
     if target in ("mp3", "mp4", "gif") and not native_gif and find_ffmpeg() is None:
-        raise DownloadError("FFmpeg and ffprobe are required for this conversion. Run install.cmd.")
+        raise DownloadError("FFmpeg and ffprobe are required for this conversion. Run scripts/install.cmd.")
 
 
 def available_conversions(inspected: MediaInspection, kind: str, *, max_height: int | None = None) -> tuple[str, ...]:
@@ -91,7 +91,7 @@ def available_conversions(inspected: MediaInspection, kind: str, *, max_height: 
 def _tools() -> tuple[Path, Path]:
     directory = find_ffmpeg()
     if directory is None:
-        raise DownloadError("FFmpeg and ffprobe are required for this conversion. Run install.cmd.")
+        raise DownloadError("FFmpeg and ffprobe are required for this conversion. Run scripts/install.cmd.")
     suffix = ".exe" if (directory / "ffmpeg.exe").is_file() else ""
     return directory / f"ffmpeg{suffix}", directory / f"ffprobe{suffix}"
 

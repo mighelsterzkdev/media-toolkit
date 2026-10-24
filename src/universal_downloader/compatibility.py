@@ -44,7 +44,7 @@ def main() -> int:
         print("Dependency compatibility check failed:")
         for issue in issues:
             print(f"- {issue}")
-        print("Run update.cmd to restore the tested dependencies.")
+        print("Run scripts/update.cmd to restore the tested dependencies.")
         return 1
     print("Dependency versions and extractor adapter hooks match the tested release.")
     return 0

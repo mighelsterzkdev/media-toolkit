@@ -1,7 +1,7 @@
 {
   "name": "media-toolkit-desktop-ui",
   "private": true,
-  "version": "0.11.4",
+  "version": "0.11.5",
   "type": "module",
   "packageManager": "pnpm@11.25.0",
   "scripts": {

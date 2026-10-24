@@ -27,7 +27,7 @@ Saved:
 
 ## Desktop app
 
-Open **start.cmd** for the dark desktop interface. It uses bundled React and shadcn/ui components inside Microsoft Edge WebView2; it does not need Node.js or an external website at runtime.
+Open **start.cmd** for the dark desktop interface. The project launcher uses the current portable release when present, otherwise the local source environment. It uses bundled React and shadcn/ui components inside Microsoft Edge WebView2; it does not need Node.js or an external website at runtime.
 
 1. In **Download**, paste a URL and click **Check**. Inspection can be cancelled.
 2. Select a verified media item, choose **Original — Recommended** or an available conversion, and click **Download**.
@@ -39,7 +39,7 @@ Checks, downloads and conversions run in contained worker processes. Cancelling 
 
 The desktop app is tested on Windows x64 and requires the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), normally available on Windows 11. The app uses its own private renderer profile under local application data and does not access your signed-in browser. It loads only the packaged interface and does not open downloaded web pages inside the privileged window.
 
-**start-cli.cmd** opens the original terminal menu. **start.cmd** with arguments still forwards them to the terminal, so existing scripts continue to work. The installed commands are `media-toolkit` for the desktop and `unidown` for the terminal. `unidown-gui` remains a compatible desktop alias.
+**start.cmd** with arguments still forwards them to the terminal, so existing scripts continue to work. For the interactive terminal, run `.venv\Scripts\python.exe -B -m universal_downloader` from source or `unidown.exe` from the portable folder. The installed commands are `media-toolkit` for the desktop and `unidown` for the terminal. `unidown-gui` remains a compatible desktop alias.
 
 The Download **Save as** dropdown uses the same image, audio and video encoders as Convert. It lists compatible formats for the selected media type, including AVIF, WebP, TIFF and JPEG 2000 images, FLAC, WAV and Opus audio, and MKV, MOV and WebM video. **Original** stays recommended when an available source meets the selected limits. Unsupported encoders and unnecessary image copies are omitted; ICO requires a square image up to 256 pixels. An audio/video compatibility conversion can share the source extension: an M4A file can contain ALAC rather than AAC, for example. Conversion checks the actual downloaded codecs before copying or encoding streams. Static-image downloads use white when flattening transparency; Convert also lets you choose black.
 
@@ -84,7 +84,7 @@ Downloads go into the extracted folder's `downloads` directory when launched thr
 
 ```powershell
 # Check the ZIP against the published checksum before extraction
-Get-FileHash .\media-toolkit-0.11.4-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\media-toolkit-0.11.5-windows-x64.zip -Algorithm SHA256
 
 # Prepare the external tools without opening the menu
 .\unidown.exe --install-tools
@@ -99,15 +99,15 @@ To update the portable version, extract a newer **complete** release into a new 
 
 ### Windows
 
-Install [Python 3.10+](https://www.python.org/downloads/), open **install.cmd**, then open **start.cmd**. Setup creates a local `.venv`, installs the tested Python dependency set including the desktop bridge, and prepares the portable tools in `.tools`. The built frontend is committed, so source users do not need Node.js. Neither folder is added to the system PATH.
+Install [Python 3.10+](https://www.python.org/downloads/), open **scripts/install.cmd**, then open **start.cmd** in the project root. Setup creates a local `.venv`, installs the tested Python dependency set including the desktop bridge, and prepares the portable tools in `.tools`. The built frontend is committed, so source users do not need Node.js. Neither folder is added to the system PATH. To explicitly run the source desktop while a portable release is present, use `.venv\Scripts\pythonw.exe -B -m universal_downloader.gui`.
 
 To select a specific Python installation:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -Python 'C:\path\to\python.exe'
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -Python 'C:\path\to\python.exe'
 ```
 
-After updating the project source, run **update.cmd**. It restores the dependency versions pinned by that release and checks the extractor adapter contract. It deliberately does not install an untested latest yt-dlp version. If a website changes, check for a newer application release.
+After updating the project source, run **scripts/update.cmd**. It restores the dependency versions pinned by that release and checks the extractor adapter contract. It deliberately does not install an untested latest yt-dlp version. If a website changes, check for a newer application release.
 
 ### Linux and macOS
 
@@ -163,7 +163,7 @@ Commands with a URL are noninteractive: they save the selected/default original 
 
 ```powershell
 # Open the interactive terminal menu
-.\start-cli.cmd
+.\.venv\Scripts\python.exe -B -m universal_downloader
 
 # Save the best available original
 .\start.cmd "https://example.com/video"
@@ -285,8 +285,8 @@ Run on Windows x64 using a separate build environment:
 python -B -m venv .tools/build-env
 .\.tools\build-env\Scripts\python.exe -B -m pip install -c constraints.txt -e ".[desktop]" pyinstaller==6.22.3
 .\.tools\build-env\Scripts\python.exe -B scripts/build_windows_gui.py --output dist
-.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/media-toolkit-0.11.4-windows-x64/unidown.exe --bootstrap
-.\.tools\build-env\Scripts\python.exe -B scripts/verify_desktop.py dist/media-toolkit-0.11.4-windows-x64/media-toolkit.exe
+.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/media-toolkit-0.11.5-windows-x64/unidown.exe --bootstrap
+.\.tools\build-env\Scripts\python.exe -B scripts/verify_desktop.py dist/media-toolkit-0.11.5-windows-x64/media-toolkit.exe
 ```
 
 Use a new output directory for each build. The desktop build produces both executables, their separate library folders, a complete ZIP, and `SHA256SUMS.txt`. `scripts/build_windows.py` remains available for a terminal-only ZIP. The committed frontend assets and notices are included without installing Node.js on the build machine. A source/output fingerprint rejects stale, changed or missing frontend assets before packaging; after editing the interface, run `pnpm install --frozen-lockfile` and `pnpm build` in `desktop-ui`. CI also rebuilds and compares them. The build checks the executable archive to exclude optional Mutagen and build-time PyInstaller modules. The verifier removes Python and external tools from PATH, checks the bundled executable, preserves local image/video originals, converts GIF animation to H.264 MP4, extracts original AAC audio, converts MP3, verifies cached reuse, runs a link queue, checks remembered preferences, and terminates/restarts a real frozen HTTP download to verify continuation. Its temporary download history is isolated from the user's history. The **Build portable Windows release** workflow builds and checks the same artifacts on tagged versions or manual runs; it does not publish a release automatically.

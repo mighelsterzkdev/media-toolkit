@@ -233,7 +233,7 @@ def download(
             raise DownloadError("The inspected URL does not match the download URL. Check the new URL first.")
         inspected.validate_format(kind)
     if kind != "image" and find_ffmpeg() is None:
-        raise DownloadError("FFmpeg and ffprobe not found. Run install.cmd on Windows, or install FFmpeg and add both programs to PATH.")
+        raise DownloadError("FFmpeg and ffprobe not found. Run scripts/install.cmd on Windows, or install FFmpeg and add both programs to PATH.")
     inspected = inspected or inspect_media(url, media_format=kind, logger=logger)
     if inspected.alternatives:
         raise DownloadError("This page contains several media items. Select one in the menu or with --item NUMBER.")
