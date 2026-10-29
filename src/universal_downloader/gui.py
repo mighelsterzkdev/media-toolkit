@@ -132,6 +132,12 @@ class DesktopApi:
     def save_settings(self, settings):
         return self._call(self._service.save_settings, settings)
 
+    def set_theme(self, theme):
+        response = self._call(self._service.set_theme, theme)
+        if response["ok"] and self._window is not None:
+            _apply_titlebar(self._window, _uses_dark_titlebar(theme))
+        return response
+
     def browse_folder(self):
         def browse():
             if self._window is None or self._webview is None:
@@ -341,14 +347,27 @@ def _guard_navigation(window, expected):
     window._unidown_navigation_guard = (navigation, initialized)
 
 
-def _dark_titlebar(window):
-    """Use Windows' standard dark caption; preserve native window controls."""
+def _windows_prefers_dark():
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+            return winreg.QueryValueEx(key, "AppsUseLightTheme")[0] == 0
+    except (ImportError, OSError):
+        return True
+
+
+def _uses_dark_titlebar(theme):
+    return theme == "dark" or (theme == "system" and _windows_prefers_dark())
+
+
+def _apply_titlebar(window, dark):
+    """Match Windows' standard caption to the theme; preserve native window controls."""
     if os.name != "nt":
         return
     try:
         import ctypes
         from ctypes import wintypes
-        enabled = wintypes.BOOL(1)
+        enabled = wintypes.BOOL(1 if dark else 0)
         handle = wintypes.HWND(window.native.Handle.ToInt64())
         ctypes.windll.dwmapi.DwmSetWindowAttribute(handle, 20, ctypes.byref(enabled), ctypes.sizeof(enabled))
     except (AttributeError, OSError):
@@ -421,14 +440,15 @@ def main() -> int:
         webview.settings["ALLOW_DOWNLOADS"] = False
         webview.settings["ALLOW_FILE_URLS"] = False
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = False
+        dark = _uses_dark_titlebar(service.theme())
         window = webview.create_window(
             APP_NAME, server.url, js_api=api, width=1000, height=760,
-            min_size=(760, 600), background_color="#09090b", text_select=True,
+            min_size=(760, 600), background_color="#0a0a0a" if dark else "#ffffff", text_select=True,
         )
         api._window, api._webview = window, webview
         if os.name == "nt":
             window.events.before_show += partial(_guard_navigation, window, server.url)
-            window.events.before_show += partial(_dark_titlebar, window)
+            window.events.before_show += partial(_apply_titlebar, window, dark)
 
         def closing():
             with api._tools_lock:

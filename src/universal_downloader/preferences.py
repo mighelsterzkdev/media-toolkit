@@ -77,6 +77,48 @@ def save_preferences(values: dict) -> Path:
                 pass
 
 
+THEMES = ("system", "dark", "light")
+
+
+def _appearance_path() -> Path:
+    # Kept apart from preferences.json so CLI preference saves never drop it.
+    return preferences_path().with_name("appearance.json")
+
+
+def load_theme() -> str:
+    try:
+        with _appearance_path().open("rb") as source:
+            data = source.read(4097)
+        value = json.loads(data.decode("utf-8")) if len(data) <= 4096 else None
+        theme = value.get("theme") if isinstance(value, dict) else None
+        return theme if theme in THEMES else "system"
+    except (OSError, ValueError, UnicodeError):
+        return "system"
+
+
+def save_theme(theme: str) -> None:
+    if theme not in THEMES:
+        raise DownloadError("Choose a supported theme.")
+    destination = _appearance_path()
+    temporary = None
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(prefix=".appearance-", suffix=".tmp", dir=destination.parent, delete=False) as output:
+            temporary = Path(output.name)
+            output.write((json.dumps({"version": 1, "theme": theme}) + "\n").encode("utf-8"))
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, destination)
+    except OSError as error:
+        raise DownloadError("The theme changed, but it could not be saved.") from error
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def reset_preferences() -> Path:
     path = preferences_path()
     try:

@@ -7,6 +7,7 @@ import { RadioGroup, RadioGroupItem } from './components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select'
 import { BatchDialog } from './components/BatchDialog'
 import { SettingsDialog } from './components/SettingsDialog'
+import { ThemeToggle, useThemeClass } from './components/ThemeToggle'
 import { TaskList } from './components/TaskList'
 import { ConvertPanel } from './components/ConvertPanel'
 import { SaveDestination } from './components/SaveDestination'
@@ -25,6 +26,8 @@ function defaultSelection(inspection: string | null, asset: MediaAsset): Selecti
 
 export default function App() {
   const { state, connected, error, pending, invoke, dismissError } = useDesktop()
+  const theme = state.theme ?? 'system'
+  useThemeClass(theme)
   const [tab, setTab] = useState('download')
   const [url, setUrl] = useState('')
   const [checkedDraft, setCheckedDraft] = useState<string | null>(null)
@@ -89,7 +92,10 @@ export default function App() {
       <div className="app-header-main"><h1>Media Toolkit</h1>
         <TabsList aria-label="Media tools"><TabsTrigger value="download"><ArrowDownToLine className="size-4" />Download</TabsTrigger><TabsTrigger value="convert"><ArrowRightLeft className="size-4" />Convert</TabsTrigger></TabsList>
       </div>
-      <SettingsDialog state={state} disabled={disconnected} busy={busy} onSave={value => invoke('save_settings', value)} onClearResume={() => invoke('clear_resume')} />
+      <div className="app-header-actions">
+        <ThemeToggle theme={theme} disabled={disconnected} onChange={value => void invoke('set_theme', value)} />
+        <SettingsDialog state={state} disabled={disconnected} busy={busy} onSave={value => invoke('save_settings', value)} onClearResume={() => invoke('clear_resume')} />
+      </div>
     </header>
 
     {!connected || error || state.notice || showToolsNotice ? <div className="app-notices">

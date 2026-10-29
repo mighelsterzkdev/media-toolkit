@@ -1,3 +1,4 @@
+export type Theme = 'system' | 'dark' | 'light'
 export interface Settings { output: string; max_height: number | null; max_size: number | null }
 export interface MediaOption { id: string; label: string; description: string; recommended: boolean }
 export interface MediaKind { id: string; label: string; options: MediaOption[] }
@@ -28,7 +29,7 @@ export interface DownloadTask {
 }
 export interface DesktopState {
   version: string; settings: Settings; inspection: Inspection; conversion: Conversion; tasks: DownloadTask[]; notice: string | null;
-  resume_count: number; tools: { status: 'ready' | 'missing' | 'installing' | 'failed'; message?: string; error?: string | null; ffmpeg?: boolean; javascript?: boolean }
+  resume_count: number; theme?: Theme; tools: { status: 'ready' | 'missing' | 'installing' | 'failed'; message?: string; error?: string | null; ffmpeg?: boolean; javascript?: boolean }
 }
 export type ApiResult = { ok: true; state: DesktopState } | { ok: false; error: string }
 export interface DesktopApi {
@@ -50,6 +51,7 @@ export interface DesktopApi {
   clear_conversion_files(): Promise<ApiResult>;
   enqueue_conversions(ids: string[], target: ConversionFormat, background: '#FFFFFF' | '#000000'): Promise<ApiResult>;
   prepare_conversion(taskId: string): Promise<ApiResult>;
+  set_theme(theme: Theme): Promise<ApiResult>;
 }
 declare global { interface Window { pywebview?: { api: DesktopApi } } }
 export const initialState: DesktopState = {

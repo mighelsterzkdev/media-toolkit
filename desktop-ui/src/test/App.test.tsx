@@ -22,6 +22,7 @@ function fixture() {
     cancel_check: vi.fn(success), enqueue: vi.fn(success), enqueue_links: vi.fn(success), cancel_task: vi.fn(success), retry_task: vi.fn(success), remove_finished: vi.fn(success),
     save_settings: vi.fn(async settings => { state.settings = settings; return success() }), browse_folder: vi.fn(success), open_folder: vi.fn(success), clear_resume: vi.fn(success), install_tools: vi.fn(success),
     select_conversion_files: vi.fn(success), remove_conversion_file: vi.fn(success), clear_conversion_files: vi.fn(success), enqueue_conversions: vi.fn(success), prepare_conversion: vi.fn(success),
+    set_theme: vi.fn(async theme => { state.theme = theme; return success() }),
   }
   window.pywebview = { api }
   return {
@@ -40,6 +41,21 @@ async function checkedApp() {
   await screen.findByText('A real checked title')
   return { ...mock, user }
 }
+
+describe('appearance', () => {
+  it('cycles the saved theme and applies it to the document', async () => {
+    const { api } = fixture()
+    const user = userEvent.setup()
+    render(<App />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /Theme: match Windows/ })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: /Theme: match Windows/ }))
+    await waitFor(() => expect(api.set_theme).toHaveBeenCalledWith('light'))
+    await waitFor(() => expect(document.documentElement).not.toHaveClass('dark'))
+    await user.click(screen.getByRole('button', { name: /Theme: light/ }))
+    await waitFor(() => expect(api.set_theme).toHaveBeenCalledWith('dark'))
+    await waitFor(() => expect(document.documentElement).toHaveClass('dark'))
+  })
+})
 
 describe('desktop flow', () => {
   it('requires a check and an explicit Download action', async () => {

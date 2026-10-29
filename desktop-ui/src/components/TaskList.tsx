@@ -44,7 +44,7 @@ export function TaskList({ tasks, disabled, retryDisabled, onCancel, onRetry, on
           </div>
           <div className="task-content">
             <p className="task-title" title={task.title || task.url}>{task.title || sourceHost(task.url) || (task.action === 'convert' ? 'Conversion' : 'Download')}</p>
-            <div className="task-meta"><span className={failed ? 'text-red-300' : ''}>{labels[task.status]}</span>
+            <div className="task-meta"><span className={failed ? 'text-danger' : ''}>{labels[task.status]}</span>
               <span className="dot">·</span><span>{task.action === 'convert' ? 'Convert' : 'Download'}</span>
               {task.format ? <><span className="dot">·</span><span>{task.action === 'convert' && task.source_format ? `${task.source_format.toUpperCase()} → ` : ''}{task.format === 'original' ? 'Original' : task.format.toUpperCase()}</span></> : null}
               {!done && task.downloaded_bytes > 0 ? <><span className="dot">·</span><span>{bytes(task.downloaded_bytes)}{task.total_bytes ? ` / ${bytes(task.total_bytes)}` : ''}</span></> : null}

@@ -25,7 +25,7 @@ from .desktop_queue_store import DesktopQueueStore, RESTORED_MESSAGE, conversion
 from .desktop_worker import ProcessWorker
 from .errors import DownloadError
 from .limits import validate_download_source_limits, validate_limits
-from .preferences import load_preferences, save_preferences
+from .preferences import THEMES, load_preferences, load_theme, save_preferences, save_theme
 from .queue import MAX_BATCH_BYTES, MAX_QUEUE_URLS, MAX_URL_LENGTH, validated_urls
 from .resume import pending_resumes
 from .urls import validate_url
@@ -168,6 +168,7 @@ class DesktopService:
             saved = {}
             self._notice = safe_error(error)
         self._settings = {"output": str(Path(saved.get("output") or default_output or PROJECT_ROOT / "downloads").expanduser().resolve()), "max_height": saved.get("max_height"), "max_size": saved.get("max_size")}
+        self._theme = load_theme()
         self._queue_store = DesktopQueueStore(default_output, queue_scope=queue_scope)
         self._tasks = self._queue_store.load()
         if self._queue_store.notice:
@@ -205,7 +206,7 @@ class DesktopService:
                     self._resume_count = 0
                 self._resume_time = time.monotonic()
             tasks = [{key: value for key, value in task.items() if not key.startswith("_")} for task in self._tasks]
-            return deepcopy({"version": __version__, "settings": self._settings, "inspection": self._inspection, "conversion": self._conversion, "tasks": tasks, "notice": self._notice, "resume_count": self._resume_count})
+            return deepcopy({"version": __version__, "settings": self._settings, "inspection": self._inspection, "conversion": self._conversion, "tasks": tasks, "notice": self._notice, "resume_count": self._resume_count, "theme": self._theme})
 
     def check_url(self, url):
         if not isinstance(url, str) or len(url) > MAX_URL_LENGTH:
@@ -703,6 +704,19 @@ class DesktopService:
         if changed:
             self.cancel_check()
         return self.get_state()
+
+    def set_theme(self, theme):
+        if theme not in THEMES:
+            raise DownloadError("Choose a supported theme.")
+        with self._lock:
+            self._ensure_open()
+            self._theme = theme
+        save_theme(theme)
+        return self.get_state()
+
+    def theme(self):
+        with self._lock:
+            return self._theme
 
     def output_directory(self):
         with self._lock:

@@ -195,6 +195,22 @@ class DesktopServiceTests(unittest.TestCase):
         self.addCleanup(self.service.shutdown)
         return self.service.get_state()
 
+    def test_theme_is_validated_and_survives_cli_preference_saves(self):
+        from universal_downloader.preferences import save_preferences
+        self.assertEqual(self.service.get_state()["theme"], "system")
+        for theme in ("blue", None, ["dark"]):
+            with self.assertRaises(DownloadError):
+                self.service.set_theme(theme)
+        self.assertEqual(self.service.set_theme("light")["theme"], "light")
+        save_preferences({"output": str(self.root / "elsewhere"), "max_height": None, "max_size": None})
+        restarted = DesktopService(self.root / "downloads")
+        self.addCleanup(restarted.shutdown)
+        self.assertEqual(restarted.get_state()["theme"], "light")
+        (self.root / "state" / "appearance.json").write_text('{"theme": "neon"}')
+        again = DesktopService(self.root / "downloads")
+        self.addCleanup(again.shutdown)
+        self.assertEqual(again.get_state()["theme"], "system")
+
     def test_checked_original_requires_explicit_enqueue_and_returns_private_raster_preview(self):
         inspection = self.inspect()
         state = self.service.get_state()
