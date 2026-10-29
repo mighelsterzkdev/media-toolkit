@@ -361,15 +361,22 @@ def _uses_dark_titlebar(theme):
 
 
 def _apply_titlebar(window, dark):
-    """Match Windows' standard caption to the theme; preserve native window controls."""
+    """Paint the native caption with the app colours; native window controls stay.
+
+    Windows 11 accepts caption, text and border colours, so the caption blends
+    into the app header. Windows 10 ignores them and keeps the dark/light mode.
+    """
     if os.name != "nt":
         return
     try:
         import ctypes
         from ctypes import wintypes
-        enabled = wintypes.BOOL(1 if dark else 0)
         handle = wintypes.HWND(window.native.Handle.ToInt64())
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(handle, 20, ctypes.byref(enabled), ctypes.sizeof(enabled))
+        background, text = (0x000A0A0A, 0x00FAFAFA) if dark else (0x00FFFFFF, 0x000A0A0A)
+        # 20 immersive dark mode, 34 border, 35 caption, 36 caption text (COLORREF 0x00BBGGRR).
+        for attribute, value in ((20, wintypes.BOOL(1 if dark else 0)), (34, wintypes.DWORD(background)),
+                                 (35, wintypes.DWORD(background)), (36, wintypes.DWORD(text))):
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(handle, attribute, ctypes.byref(value), ctypes.sizeof(value))
     except (AttributeError, OSError):
         pass
 
