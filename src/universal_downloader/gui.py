@@ -377,6 +377,14 @@ def _apply_titlebar(window, dark):
         for attribute, value in ((20, wintypes.BOOL(1 if dark else 0)), (34, wintypes.DWORD(background)),
                                  (35, wintypes.DWORD(background)), (36, wintypes.DWORD(text))):
             ctypes.windll.dwmapi.DwmSetWindowAttribute(handle, attribute, ctypes.byref(value), ctypes.sizeof(value))
+
+        class Options(ctypes.Structure):
+            _fields_ = [("flags", wintypes.DWORD), ("mask", wintypes.DWORD)]
+
+        # The app header already names the app: skip the caption text and icon (WTNCA_NODRAWCAPTION |
+        # WTNCA_NODRAWICON). The taskbar, Alt+Tab and the native window buttons are unchanged.
+        hidden = Options(0x3, 0x3)
+        ctypes.windll.uxtheme.SetWindowThemeAttribute(handle, 1, ctypes.byref(hidden), ctypes.sizeof(hidden))
     except (AttributeError, OSError):
         pass
 
