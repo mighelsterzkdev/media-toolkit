@@ -5,25 +5,7 @@ A desktop app with two tools: **Download** saves media from a URL in its origina
 **Desktop: Windows 10/11 · React / shadcn/ui / pywebview**
 **Download engine and terminal: Python · yt-dlp · FFmpeg · Pillow · Windows / Linux / macOS**
 
-```text
-MEDIA TOOLKIT
-Check a link, then choose the original or another format.
-
-Paste the URL (Enter to exit): https://example.com/animation
-
-Checking the URL...
-
-Title: My animation
-Available: Animation
-
-1. Original GIF (recommended)
-2. MP4 video (H.264 / AAC)
-0. Another URL
-Save as [1]: 2
-
-Saved:
-.../downloads/My animation [source-identifier] [animation-mp4].mp4
-```
+![Media Toolkit desktop interface](docs/media-toolkit.jpg)
 
 ## Desktop app
 
@@ -123,6 +105,26 @@ python3 -m venv .venv
 An activated environment also provides the `unidown` command. On Windows, the equivalent Python executable is `.venv\Scripts\python.exe`.
 
 ## Choosing what to save in the terminal
+
+```text
+MEDIA TOOLKIT
+Check a link, then choose the original or another format.
+
+Paste the URL (Enter to exit): https://example.com/animation
+
+Checking the URL...
+
+Title: My animation
+Available: Animation
+
+1. Original GIF (recommended)
+2. MP4 video (H.264 / AAC)
+0. Another URL
+Save as [1]: 2
+
+Saved:
+.../downloads/My animation [source-identifier] [animation-mp4].mp4
+```
 
 The interactive session never starts the requested media download before you choose an output. It may read page data, image bytes, and bounded media probes while checking what is actually available.
 
