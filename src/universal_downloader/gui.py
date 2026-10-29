@@ -363,7 +363,7 @@ def _uses_dark_titlebar(theme):
 def _apply_titlebar(window, dark):
     """Paint the native caption with the app colours; native window controls stay.
 
-    Windows 11 accepts caption, text and border colours, so the caption blends
+    Windows 11 accepts caption and text colours, so the caption blends
     into the app header. Windows 10 ignores them and keeps the dark/light mode.
     """
     if os.name != "nt":
@@ -373,18 +373,11 @@ def _apply_titlebar(window, dark):
         from ctypes import wintypes
         handle = wintypes.HWND(window.native.Handle.ToInt64())
         background, text = (0x000A0A0A, 0x00FAFAFA) if dark else (0x00FFFFFF, 0x000A0A0A)
-        # 20 immersive dark mode, 34 border, 35 caption, 36 caption text (COLORREF 0x00BBGGRR).
-        for attribute, value in ((20, wintypes.BOOL(1 if dark else 0)), (34, wintypes.DWORD(background)),
-                                 (35, wintypes.DWORD(background)), (36, wintypes.DWORD(text))):
+        # 20 immersive dark mode, 35 caption, 36 caption text (COLORREF 0x00BBGGRR). The window border
+        # keeps the Windows default so the window stays visible against dark backgrounds.
+        for attribute, value in ((20, wintypes.BOOL(1 if dark else 0)), (35, wintypes.DWORD(background)),
+                                 (36, wintypes.DWORD(text))):
             ctypes.windll.dwmapi.DwmSetWindowAttribute(handle, attribute, ctypes.byref(value), ctypes.sizeof(value))
-
-        class Options(ctypes.Structure):
-            _fields_ = [("flags", wintypes.DWORD), ("mask", wintypes.DWORD)]
-
-        # The app header already names the app: skip the caption text and icon (WTNCA_NODRAWCAPTION |
-        # WTNCA_NODRAWICON). The taskbar, Alt+Tab and the native window buttons are unchanged.
-        hidden = Options(0x3, 0x3)
-        ctypes.windll.uxtheme.SetWindowThemeAttribute(handle, 1, ctypes.byref(hidden), ctypes.sizeof(hidden))
     except (AttributeError, OSError):
         pass
 

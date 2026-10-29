@@ -40,6 +40,7 @@
   input::-webkit-inner-spin-button, input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
   ::selection { @apply bg-secondary text-foreground; }
   :focus-visible { outline-offset: 3px; }
+  * { scrollbar-width: thin; scrollbar-color: hsl(var(--input)) transparent; }
 }
 
 @layer components {
