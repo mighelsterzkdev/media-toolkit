@@ -126,7 +126,7 @@ def build(output: Path) -> Path:
         "Run unidown.exe --help for the optional terminal interface.\n"
         "CLI examples: unidown.exe --doctor | unidown.exe --batch links.txt | unidown.exe --version\n"
         "Prepare tools from a terminal: unidown.exe --install-tools\n"
-        "To update, extract a newer complete release. Do not replace only an EXE.\n"
+        "New versions are offered inside the desktop app. To update by hand, extract a newer complete release; do not replace only an EXE.\n"
         "Source and instructions: https://github.com/mighelsterzkdev/media-toolkit\n"
         "Third-party notices are in licenses/. This release is unsigned; verify SHA256SUMS.txt.\n",
         encoding="utf-8",

@@ -16,7 +16,7 @@ import sys
 import threading
 from urllib.parse import unquote, urlsplit
 
-from . import APP_NAME, __version__, frame, shell
+from . import APP_NAME, __version__, frame, shell, updates
 from .dependencies import PROJECT_ROOT, find_ffmpeg, find_js_runtime
 from .errors import DownloadError
 from .preferences import preferences_path
@@ -33,7 +33,7 @@ CSP = (
 
 
 def _safe_error(error: BaseException) -> str:
-    if isinstance(error, DownloadError):
+    if isinstance(error, (DownloadError, updates.UpdateError)):
         # Service errors are deliberately written for display. Unexpected errors
         # never expose traceback paths, environment variables, or request URLs.
         text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(error))
@@ -56,8 +56,9 @@ def _open_directory(directory: Path) -> None:
 class DesktopApi:
     """Only these public methods are exported through window.pywebview.api."""
 
-    def __init__(self, service):
+    def __init__(self, service, updater=None):
         self._service = service
+        self._updater = updater
         self._window = None
         self._webview = None
         self._tools_lock = threading.Lock()
@@ -77,6 +78,8 @@ class DesktopApi:
         with self._tools_lock:
             state["tools"] = dict(self._tools)
         state["version"] = __version__
+        if self._updater is not None:
+            state["update"] = self._updater.snapshot()
         return state
 
     def _call(self, action, *args):
@@ -151,6 +154,38 @@ class DesktopApi:
 
     def set_language(self, language):
         return self._call(self._service.set_language, language)
+
+    def _update_call(self, action):
+        def run():
+            if self._updater is None:
+                raise DownloadError("Updates are not available in this copy.")
+            action(self._updater)
+        return self._call(run)
+
+    def check_for_updates(self):
+        return self._update_call(lambda updater: updater.check(manual=True))
+
+    def download_update(self):
+        return self._update_call(lambda updater: updater.download())
+
+    def dismiss_update(self):
+        return self._update_call(lambda updater: updater.dismiss())
+
+    def open_update_page(self):
+        return self._update_call(lambda updater: os.startfile(updater.release_page()))
+
+    def install_update(self):
+        def install(updater):
+            with self._tools_lock:
+                preparing = self._tools["status"] == "installing"
+            if preparing or self._service.active_jobs():
+                raise DownloadError("Wait for the current work to finish first.")
+            updater.install()
+            if self._window is not None:
+                # The staged copy waits for this process to exit, installs, then reopens the app.
+                self._closed = True
+                self._window.destroy()
+        return self._update_call(install)
 
     def _drop(self, event):
         """Files dropped on the window go to the converter; links are handled by the page."""
@@ -509,7 +544,12 @@ def main() -> int:
     stop = threading.Event()
     try:
         service = DesktopService(default_output=PROJECT_ROOT / "downloads", queue_scope="desktop")
-        api = DesktopApi(service)
+        frozen = getattr(sys, "frozen", False)
+        updater = updates.Updater(
+            name="media-toolkit", repository="mighelsterzkdev/media-toolkit", version=__version__, executable="media-toolkit.exe",
+            state_file=preferences_path().parent / "updates.json", install_dir=PROJECT_ROOT if frozen else None,
+        )
+        api = DesktopApi(service, updater)
         server = AssetServer()
         webview.settings["ALLOW_DOWNLOADS"] = False
         webview.settings["ALLOW_FILE_URLS"] = False
@@ -526,6 +566,8 @@ def main() -> int:
             window.events.before_show += partial(frame.use_custom_frame, window)
             feedback = shell.Feedback(window, APP_NAME)
             window.events.shown += lambda: threading.Thread(target=_watch, args=(service, feedback, stop), name="unidown-feedback", daemon=True).start()
+            window.events.shown += updater.check
+            window.events.shown += updater.remove_leftovers
 
         def loaded():
             from webview.dom import DOMEventHandler

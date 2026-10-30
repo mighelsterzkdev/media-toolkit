@@ -26,6 +26,9 @@ function fixture() {
     select_conversion_files: vi.fn(success), remove_conversion_file: vi.fn(success), clear_conversion_files: vi.fn(success), enqueue_conversions: vi.fn(success), prepare_conversion: vi.fn(success),
     set_theme: vi.fn(async theme => { state.theme = theme; return success() }),
     set_language: vi.fn(async language => { state.language = language; return success() }),
+    check_for_updates: vi.fn(async () => { state.update = { status: 'current', version: null, progress: null, error: null }; return success() }),
+    download_update: vi.fn(async () => { state.update = { status: 'ready', version: '0.13.1', progress: 1, error: null }; return success() }),
+    install_update: vi.fn(success), dismiss_update: vi.fn(success), open_update_page: vi.fn(success),
   }
   window.pywebview = { api }
   return {
@@ -57,6 +60,44 @@ describe('appearance', () => {
     await user.click(screen.getByRole('button', { name: /Theme: light/ }))
     await waitFor(() => expect(api.set_theme).toHaveBeenCalledWith('dark'))
     await waitFor(() => expect(document.documentElement).toHaveClass('dark'))
+  })
+})
+
+describe('updates', () => {
+  it('offers a newer release and installs it only after explicit clicks', async () => {
+    const { api, update } = fixture()
+    const user = userEvent.setup()
+    render(<App />)
+    await waitFor(() => expect(screen.getByLabelText('Media URL')).toBeEnabled())
+    act(() => update({ update: { status: 'available', version: '0.13.1', progress: null, error: null } }))
+    await user.click(await screen.findByRole('button', { name: 'Update' }, { timeout: 2000 }))
+    expect(api.download_update).toHaveBeenCalledOnce()
+    await user.click(await screen.findByRole('button', { name: 'Restart to update' }))
+    expect(api.install_update).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a downloaded update waiting while the queue is running', async () => {
+    const { update } = fixture()
+    render(<App />)
+    await waitFor(() => expect(screen.getByLabelText('Media URL')).toBeEnabled())
+    act(() => update({ update: { status: 'ready', version: '0.13.1', progress: 1, error: null },
+      tasks: [{ id: 'task-1', url, title: 'Video', kind: 'video', format: 'original', status: 'downloading', progress: 40, downloaded_bytes: 4, total_bytes: 10,
+        speed: null, eta: null, path: null, error: null }] }))
+    expect(await screen.findByText('Finish the current work to install Media Toolkit 0.13.1.', {}, { timeout: 2000 })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Restart to update' })).toBeDisabled()
+  })
+
+  it('checks manually from Settings and shows the version', async () => {
+    const { api, update } = fixture()
+    update({ update: { status: 'idle', version: null, progress: null, error: null } })
+    const user = userEvent.setup()
+    render(<App />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Settings' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(screen.getByText('Version 0.8.0')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Check for updates' }))
+    expect(api.check_for_updates).toHaveBeenCalledOnce()
+    expect(await screen.findByText('You have the latest version.')).toBeInTheDocument()
   })
 })
 

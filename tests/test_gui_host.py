@@ -31,6 +31,22 @@ class DesktopBridgeTests(unittest.TestCase):
                 json.dumps(response)
                 getattr(self.service, method).assert_called_with(*args)
 
+    def test_updates_are_reported_and_never_install_over_running_work(self):
+        self.assertNotIn("update", self.api.get_state()["state"])
+        self.assertEqual(self.api.download_update(), {"ok": False, "error": "Updates are not available in this copy."})
+        updater = Mock()
+        updater.snapshot.return_value = {"status": "ready", "version": "9.0.0", "progress": 1.0, "error": None}
+        self.api._updater = updater
+        self.assertEqual(self.api.get_state()["state"]["update"]["version"], "9.0.0")
+        self.assertTrue(self.api.check_for_updates()["ok"])
+        updater.check.assert_called_once_with(manual=True)
+        self.service.active_jobs.return_value = True
+        self.assertEqual(self.api.install_update(), {"ok": False, "error": "Wait for the current work to finish first."})
+        updater.install.assert_not_called()
+        self.service.active_jobs.return_value = False
+        self.assertTrue(self.api.install_update()["ok"])
+        updater.install.assert_called_once_with()
+
     def test_dropped_files_go_to_the_converter_by_their_native_paths(self):
         self.api._drop({"dataTransfer": {"files": [
             {"name": "a.png", "pywebviewFullPath": r"C:\media\a.png"}, {"name": "link"}, "not a file",

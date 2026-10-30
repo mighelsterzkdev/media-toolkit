@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { LoaderCircle, Settings2 } from 'lucide-react'
+import { LoaderCircle, RefreshCw, Settings2 } from 'lucide-react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
@@ -11,9 +11,10 @@ interface Props {
   state: DesktopState; disabled: boolean; busy: boolean;
   onSave(value: Settings): Promise<DesktopState | null>;
   onClearResume(): Promise<DesktopState | null>;
+  onCheckUpdates(): Promise<DesktopState | null>;
 }
 
-export function SettingsDialog({ state, disabled, busy, onSave, onClearResume }: Props) {
+export function SettingsDialog({ state, disabled, busy, onSave, onClearResume, onCheckUpdates }: Props) {
   const [open, setOpen] = useState(false)
   const [height, setHeight] = useState('')
   const [size, setSize] = useState('')
@@ -51,9 +52,23 @@ export function SettingsDialog({ state, disabled, busy, onSave, onClearResume }:
         </div>
         <p className="field-help">{t('Leave limits empty for the best available quality. Height applies to videos; file size applies to all downloads.')}</p>
         {state.resume_count > 0 ? <div className="resume-settings"><div><p>{t('Unfinished downloads')}</p><span>{t(state.resume_count === 1 ? '{count} saved download. Active downloads are kept.' : '{count} saved downloads. Active downloads are kept.', { count: state.resume_count })}</span></div><Button type="button" size="sm" variant="outline" disabled={saving || busy} onClick={() => void onClearResume()}>{t('Clear partials')}</Button></div> : null}
+        {state.update && state.update.status !== 'unsupported' ? <UpdateSettings state={state} busy={busy} onCheck={onCheckUpdates} /> : null}
         {error ? <p className="inline-error" role="alert">{error}</p> : null}
         <DialogFooter><Button type="button" variant="outline" onClick={() => changeOpen(false)} disabled={saving}>{t('Cancel')}</Button><Button type="submit" disabled={saving || busy}>{saving ? <LoaderCircle className="animate-spin" /> : null}{t('Save settings')}</Button></DialogFooter>
       </form>
     </DialogContent>
   </Dialog>
+}
+
+function UpdateSettings({ state, busy, onCheck }: { state: DesktopState; busy: boolean; onCheck(): Promise<DesktopState | null> }) {
+  const update = state.update!
+  const checking = update.status === 'checking'
+  const status = checking ? t('Checking for updates…')
+    : update.status === 'current' ? t('You have the latest version.')
+    : update.status === 'available' || update.status === 'downloading' || update.status === 'ready' ? t('{name} {version} is available.', { name: 'Media Toolkit', version: update.version ?? '' })
+    : update.status === 'failed' && !update.version ? t(update.error ?? 'Could not check for updates. Check your connection and try again.')
+    : t('Updates are checked once a day and only installed when you click Update.')
+  return <div className="resume-settings"><div><p>{t('Version {version}', { version: state.version })}</p><span role="status">{status}</span></div>
+    <Button type="button" size="sm" variant="outline" disabled={busy || checking || update.status === 'downloading' || update.status === 'ready'} onClick={() => void onCheck()}>
+      {checking ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}{t('Check for updates')}</Button></div>
 }

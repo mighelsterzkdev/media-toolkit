@@ -74,6 +74,7 @@
   .notice { @apply mb-4 flex items-center gap-4 rounded-md border bg-muted/30 p-4 text-sm leading-6 text-foreground; }
   .notice > span { @apply min-w-0 flex-1; }
   .notice-error { @apply border-destructive/50 text-danger; }
+  .notice > .update-percent { @apply flex-none text-muted-foreground; }
   .download-card, .convert-card { @apply min-w-0 shrink-0 px-6 pt-4; }
   .section-heading { @apply flex min-h-10 items-center justify-between gap-4; }
   .section-heading h2 { @apply text-base font-semibold; }

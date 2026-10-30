@@ -28,9 +28,13 @@ export interface DownloadTask {
   action?: 'download' | 'convert'; source_format?: string | null; can_convert?: boolean;
   operation?: 'preparing' | 'encoding' | 'copying' | null; thumbnail?: string | null
 }
+export interface UpdateState {
+  status: 'unsupported' | 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'ready' | 'failed'
+  version: string | null; progress: number | null; error: string | null
+}
 export interface DesktopState {
   version: string; settings: Settings; inspection: Inspection; conversion: Conversion; tasks: DownloadTask[]; notice: string | null;
-  resume_count: number; theme?: Theme; language?: Language; tools: { status: 'ready' | 'missing' | 'installing' | 'failed'; message?: string; error?: string | null; ffmpeg?: boolean; javascript?: boolean }
+  resume_count: number; update?: UpdateState | null; theme?: Theme; language?: Language; tools: { status: 'ready' | 'missing' | 'installing' | 'failed'; message?: string; error?: string | null; ffmpeg?: boolean; javascript?: boolean }
 }
 export type ApiResult = { ok: true; state: DesktopState } | { ok: false; error: string }
 export interface DesktopApi {
@@ -54,6 +58,11 @@ export interface DesktopApi {
   prepare_conversion(taskId: string): Promise<ApiResult>;
   set_theme(theme: Theme): Promise<ApiResult>;
   set_language(language: Language): Promise<ApiResult>;
+  check_for_updates(): Promise<ApiResult>;
+  download_update(): Promise<ApiResult>;
+  install_update(): Promise<ApiResult>;
+  dismiss_update(): Promise<ApiResult>;
+  open_update_page(): Promise<ApiResult>;
   window_action?(action: WindowAction): Promise<{ ok: true } | { ok: false; error: string }>;
 }
 export type ResizeEdge = 'top' | 'bottom' | 'left' | 'right' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'

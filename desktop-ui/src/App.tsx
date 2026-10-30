@@ -7,6 +7,7 @@ import { Label } from './components/ui/label'
 import { RadioGroup, RadioGroupItem } from './components/ui/radio-group'
 import { BatchDialog } from './components/BatchDialog'
 import { SettingsDialog } from './components/SettingsDialog'
+import { UpdateNotice, showsUpdate } from './components/UpdateNotice'
 import { ThemeToggle, useThemeClass } from './components/ThemeToggle'
 import { LanguageToggle } from './components/LanguageToggle'
 import { WindowControls, dragFromHeader, maximizeFromHeader } from './components/TitleBar'
@@ -72,6 +73,7 @@ export default function App() {
   const option = kind?.options.find(item => item.id === chosen?.option) ?? kind?.options.find(item => item.recommended) ?? kind?.options[0]
   const disconnected = !connected
   const busy = pending != null
+  const working = state.tools.status === 'installing' || state.tasks.some(task => ['queued', 'checking', 'downloading', 'converting', 'finalizing', 'cancelling'].includes(task.status))
   const installing = state.tools.status === 'installing'
   const toolsReady = state.tools.status === 'ready'
   const showToolsNotice = tab === 'download' ? !toolsReady : state.tools.ffmpeg === false
@@ -169,11 +171,13 @@ export default function App() {
       <div className="app-header-actions">
         <LanguageToggle language={state.language ?? 'system'} disabled={disconnected} onChange={value => void invoke('set_language', value)} />
         <ThemeToggle theme={theme} disabled={disconnected} onChange={value => void invoke('set_theme', value)} />
-        <SettingsDialog state={state} disabled={disconnected} busy={busy} onSave={value => invoke('save_settings', value)} onClearResume={() => invoke('clear_resume')} />
+        <SettingsDialog state={state} disabled={disconnected} busy={busy} onSave={value => invoke('save_settings', value)} onClearResume={() => invoke('clear_resume')} onCheckUpdates={() => invoke('check_for_updates')} />
       </div>
     </header>
 
-    {!connected || error || state.notice || showToolsNotice ? <div className="app-notices">
+    {!connected || error || state.notice || showToolsNotice || showsUpdate(state.update) ? <div className="app-notices">
+    <UpdateNotice update={state.update} name="Media Toolkit" busy={working} pending={pending === 'download_update' || pending === 'install_update'}
+      onDownload={() => void invoke('download_update')} onInstall={() => void invoke('install_update')} onDismiss={() => void invoke('dismiss_update')} onOpenPage={() => void invoke('open_update_page')} />
     {!connected ? <div className="notice" role="status"><CircleAlert className="size-4 shrink-0" /><span>{t('Waiting for the desktop connection. Open this app with Media Toolkit.')}</span></div> : null}
     {error ? <div className="notice notice-error" role="alert"><CircleAlert className="size-4 shrink-0" /><span>{error}</span><Button variant="ghost" size="icon" aria-label={t('Dismiss error')} onClick={dismissError}><X /></Button></div> : null}
     {state.notice ? <div className="notice" role="status"><span>{t(state.notice)}</span></div> : null}
