@@ -222,6 +222,22 @@
   .app-header-main { column-gap: 16px; }
   .app-header-actions { @apply flex shrink-0 items-center gap-1; }
 }
+
+/* Motion: small and quick. With reduced motion (Windows "Animation effects" off), movement
+   becomes a plain fade. Spinners and progress keep moving, because they show that work continues. */
+@keyframes enter { from { opacity: 0; transform: translateY(4px); } }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes dialog-in { from { opacity: 0; transform: translate(-50%, -50%) scale(.97); } }
+@keyframes dialog-out { to { opacity: 0; transform: translate(-50%, -50%) scale(.97); } }
+@keyframes pulse-track { 50% { opacity: .35; } }
+.dialog-overlay[data-state="open"] { animation: fade-in .15s ease-out; }
+.dialog-overlay[data-state="closed"] { animation: fade-out .12s ease-in; }
+.dialog-content[data-state="open"] { animation: dialog-in .18s cubic-bezier(.2, .8, .2, 1); }
+.dialog-content[data-state="closed"] { animation: dialog-out .12s ease-in; }
+.notice, .checking-state, .inspection-error, .asset-picker, .inspected-result, .drop-hint, .conversion-file, .conversion-options, .task-row, .drop-overlay { animation: enter .22s ease-out both; }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+  .notice, .checking-state, .inspection-error, .asset-picker, .inspected-result, .drop-hint, .conversion-file, .conversion-options, .task-row, .drop-overlay, .dialog-content[data-state="open"] { animation-name: fade-in; }
+  .dialog-content[data-state="closed"] { animation-name: fade-out; }
+  .progress-indeterminate > div { margin-left: 0; width: 100%; animation: pulse-track 1.5s ease-in-out infinite; }
 }
