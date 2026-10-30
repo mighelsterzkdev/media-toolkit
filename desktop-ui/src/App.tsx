@@ -216,7 +216,7 @@ export default function App() {
             {hint ? <p id="download-format-description" className="field-help">{hint}</p> : null}
           </div> : <p className="url-hint px-0">{t('No format fits current limits. Change settings and check again.')}</p>}
         </div> : null}
-        {!checking && !ready && !inspectionError ? <div className="drop-hint"><Upload className="size-5" aria-hidden="true" /><div><p>{t('Paste a link, or drop a link or file here')}</p><span>{t('Videos, audio and images from most sites. Dropped files open in Convert.')}</span></div></div> : null}
+        {!checking && !ready && !inspectionError ? <div className="drop-hint"><Link2 className="size-5" aria-hidden="true" /><div><p>{t('Paste a link above, or drag one here')}</p><span>{t('Videos, audio and images from most sites.')}</span></div></div> : null}
         {ready && assets.length === 0 ? <p className="url-hint">{t('No downloadable media was found at this link.')}</p> : null}
         <div className="download-footer">
           <SaveDestination output={state.settings.output} disabled={disconnected || busy} onBrowse={() => void invoke('browse_folder')} />
