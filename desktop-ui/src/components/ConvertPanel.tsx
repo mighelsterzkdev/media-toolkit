@@ -149,7 +149,7 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
               {!checking && !file.error && file.targets.length === 0 ? <span>{t('No compatible output formats are available with the installed tools.')}</span> : null}
               {willSkip ? <span className="conversion-file-skip">{t(file.format?.toLowerCase() === target ? 'Already {format} · skipped' : 'Incompatible with {format} · skipped', { format: formatName(target) })}</span> : null}
             </div>
-            <Button variant="ghost" size="icon" aria-label={t('Remove {name}', { name: file.name })} title={t('Remove from selection')} disabled={busy} onClick={() => onRemove(file.id)}><X className="size-4" /></Button>
+            <Button variant="ghost" size="icon-sm" aria-label={t('Remove {name}', { name: file.name })} title={t('Remove from selection')} disabled={busy} onClick={() => onRemove(file.id)}><X className="size-4" /></Button>
           </li>
         })}
       </ul>
@@ -180,7 +180,7 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
     </div> : null}
     <div className="download-footer">
       <SaveDestination output={output} disabled={disabled} onBrowse={onBrowse} />
-      <Button className="download-button" onClick={() => void convert()} disabled={busy || needsTools || !target || compatible.length === 0}>{submitting ? <LoaderCircle className="animate-spin" /> : <ArrowRightLeft />}{t('Convert')}</Button>
+      <Button size="lg" className="download-button" onClick={() => void convert()} disabled={busy || needsTools || !target || compatible.length === 0}>{submitting ? <LoaderCircle className="animate-spin" /> : <ArrowRightLeft />}{t('Convert')}</Button>
     </div>
   </section>
 }

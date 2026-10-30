@@ -67,10 +67,10 @@ export function TaskList({ tasks, disabled, retryDisabled, onCancel, onRetry, on
             {task.error ? <p className="task-error">{t(task.error)}</p> : null}
           </div>
           <div className="task-actions">
-            {done && task.can_convert ? <Button variant="ghost" size="icon" title={t('Convert file')} aria-label={t('Convert file {title}', { title: task.title })} disabled={disabled} onClick={() => onConvert(task.id)}><ArrowRightLeft /></Button> : null}
-            {done && task.path ? <Button variant="ghost" size="icon" title={t('Open containing folder')} aria-label={t('Open folder for {title}', { title: task.title })} disabled={disabled} onClick={() => onOpen(task.id)}><FolderOpen /></Button> : null}
-            {failed || task.status === 'cancelled' ? <Button variant="ghost" size="icon" title={t('Retry task')} aria-label={t('Retry {title}', { title: task.title })} disabled={disabled || (retryDisabled && task.action !== 'convert')} onClick={() => onRetry(task.id)}><RotateCcw /></Button> : null}
-            {isActive ? <Button variant="ghost" size="icon" title={t('Cancel task')} aria-label={t('Cancel {title}', { title: task.title || t('task') })} disabled={disabled} onClick={() => onCancel(task.id)}><X /></Button> : null}
+            {done && task.can_convert ? <Button variant="ghost" size="icon-sm" title={t('Convert file')} aria-label={t('Convert file {title}', { title: task.title })} disabled={disabled} onClick={() => onConvert(task.id)}><ArrowRightLeft /></Button> : null}
+            {done && task.path ? <Button variant="ghost" size="icon-sm" title={t('Open containing folder')} aria-label={t('Open folder for {title}', { title: task.title })} disabled={disabled} onClick={() => onOpen(task.id)}><FolderOpen /></Button> : null}
+            {failed || task.status === 'cancelled' ? <Button variant="ghost" size="icon-sm" title={t('Retry task')} aria-label={t('Retry {title}', { title: task.title })} disabled={disabled || (retryDisabled && task.action !== 'convert')} onClick={() => onRetry(task.id)}><RotateCcw /></Button> : null}
+            {isActive ? <Button variant="ghost" size="icon-sm" title={t('Cancel task')} aria-label={t('Cancel {title}', { title: task.title || t('task') })} disabled={disabled} onClick={() => onCancel(task.id)}><X /></Button> : null}
           </div>
         </li>
       })}

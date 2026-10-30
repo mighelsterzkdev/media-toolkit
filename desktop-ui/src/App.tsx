@@ -250,7 +250,7 @@ export default function App() {
         {ready && assets.length === 0 ? <p className="url-hint">{t('No downloadable media was found at this link.')}</p> : null}
         <div className="download-footer">
           <SaveDestination output={state.settings.output} disabled={disconnected || busy} onBrowse={() => void invoke('browse_folder')} />
-          <Button className="download-button" onClick={() => void download()} disabled={!canDownload}>{downloadBusy ? <LoaderCircle className="animate-spin" /> : <ArrowDownToLine />}{t('Download')}</Button>
+          <Button size="lg" className="download-button" onClick={() => void download()} disabled={!canDownload}>{downloadBusy ? <LoaderCircle className="animate-spin" /> : <ArrowDownToLine />}{t('Download')}</Button>
         </div>
       </section>
       </TabsContent>
