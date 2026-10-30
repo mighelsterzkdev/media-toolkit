@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from hashlib import sha256
 from html.parser import HTMLParser
+import io
 import json
 import math
 from pathlib import Path
 import re
 import time
-from urllib.parse import unquote, urljoin, urlsplit
+from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 
 from yt_dlp.networking import Request
 from yt_dlp.networking.exceptions import RequestError
@@ -23,7 +24,14 @@ from .urls import google_target, validate_url
 
 MAX_PAGE_BYTES = 4 * 1024 * 1024
 MAX_CANDIDATES = 12
-MAX_DISCOVERY_BYTES = 64 * 1024 * 1024
+# A page's own pictures are offered as a gallery; icons and avatars are left out.
+MAX_PAGE_IMAGES = 40
+MIN_IMAGE_SIDE = 80
+MAX_DISCOVERY_BYTES = 160 * 1024 * 1024
+MAX_REQUESTS = 80
+DISCOVERY_SECONDS = 60
+_RASTER = re.compile(r"\.(?:png|jpe?g|webp|gif|avif|bmp|tiff?)(?:[?#]|$)", re.IGNORECASE)
+_CSS_URL = re.compile(r"""url\(\s*['"]?([^'")\s]+)['"]?\s*\)""", re.IGNORECASE)
 _SPACE = " \t\r\n\f"
 
 
@@ -104,6 +112,28 @@ def image_variants(attrs: dict, sources=()) -> tuple[str, ...]:
     return tuple(dict.fromkeys(url for url, _ in sorted(ranked, key=lambda item: item[1], reverse=True)))[:6]
 
 
+def _unwrapped(url: str) -> str:
+    """The original behind a site's image optimizer, such as Next.js /_next/image?url=..."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if parts.path.rstrip("/").endswith(("/_next/image", "/_vercel/image")):
+        original = parse_qs(parts.query).get("url", [""])[0]
+        if original and not original.lower().startswith(("data:", "javascript:", "file:", "blob:")):
+            return original
+    return url
+
+
+def _image_size(data: bytes) -> tuple[int, int] | None:
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(data)) as image:
+            return image.size
+    except Exception:
+        return None
+
+
 def _image_signature(data: bytes) -> bool:
     return data.startswith((b"GIF87a", b"GIF89a", b"\x89PNG\r\n", b"\xff\xd8\xff", b"BM", b"II*\0", b"MM\0*", b"\0\0\1\0")) or (
         data.startswith(b"RIFF") and data[8:12] == b"WEBP"
@@ -121,6 +151,7 @@ class PageMedia(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.candidates = []
         self.images = []
+        self.backgrounds = []
         self.covers = []
         self.title = ""
         self.base = None
@@ -131,16 +162,26 @@ class PageMedia(HTMLParser):
         self._json = []
         self._container = None
         self._picture = None
+        self._style = False
         self.variants = {}
 
-    def add(self, url, kind, *, primary=True, cover=False):
+    def add(self, url, kind, *, primary=True, cover=False, background=False):
         if isinstance(url, str) and url:
-            collection = self.covers if cover else self.candidates if primary else self.images
-            if len(collection) < MAX_CANDIDATES and (url, kind) not in collection:
+            collection = self.covers if cover else self.candidates if primary else self.backgrounds if background else self.images
+            limit = MAX_PAGE_IMAGES if collection is self.images or collection is self.backgrounds else MAX_CANDIDATES
+            if len(collection) < limit and (url, kind) not in collection:
                 collection.append((url, kind))
+
+    def _styles(self, text):
+        # Section and banner pictures are often CSS backgrounds rather than <img>.
+        for url in _CSS_URL.findall(text or ""):
+            if _usable_image_url(url) and _RASTER.search(url):
+                self.add(url, "image", primary=False, background=True)
 
     def handle_starttag(self, tag, attributes):
         attrs = dict(attributes)
+        if attrs.get("style"):
+            self._styles(attrs["style"])
         if tag == "title":
             self._title = True
         elif tag == "base" and not self.base:
@@ -201,6 +242,11 @@ class PageMedia(HTMLParser):
                             self.variants[variants[0]] = variants
         elif tag == "link" and (attrs.get("rel") or "").lower() == "image_src":
             self.add(attrs.get("href"), "image", primary=False)
+        elif tag == "link" and (attrs.get("rel") or "").lower() == "preload" and (attrs.get("as") or "").lower() == "image":
+            if _usable_image_url(attrs.get("href")) and _RASTER.search(_unwrapped(attrs["href"])):
+                self.add(attrs["href"], "image", primary=False, background=True)
+        elif tag == "style":
+            self._style = True
         elif tag == "script" and (attrs.get("type") or "").lower() == "application/ld+json":
             self._script = True
             self._json = []
@@ -215,6 +261,8 @@ class PageMedia(HTMLParser):
             self.title = data.strip()
         if self._script:
             self._json.append(data)
+        if self._style:
+            self._styles(data)
 
     def handle_endtag(self, tag):
         if tag == "title":
@@ -223,6 +271,8 @@ class PageMedia(HTMLParser):
             self._container = None
         elif tag == "picture":
             self._picture = None
+        elif tag == "style":
+            self._style = False
         elif tag == "script" and self._script:
             self._script = None
             try:
@@ -261,12 +311,12 @@ def discover(downloader, url: str, *, image_only=False, _seen=None, _budget=None
     are verified from their bytes, including files with no usable extension.
     """
     seen = set() if _seen is None else _seen
-    budget = [MAX_DISCOVERY_BYTES, 0, time.monotonic() + 40] if _budget is None else _budget
+    budget = [MAX_DISCOVERY_BYTES, 0, time.monotonic() + DISCOVERY_SECONDS] if _budget is None else _budget
     url = google_target(url)
     if url in seen or len(seen) >= 5:
         raise DownloadError("This page contains a redirect loop or too many nested pages.")
     budget[1] += 1
-    if budget[0] <= 0 or budget[1] > 24 or time.monotonic() >= budget[2]:
+    if budget[0] <= 0 or budget[1] > MAX_REQUESTS or time.monotonic() >= budget[2]:
         raise DownloadError("This page exceeded the media discovery limit. Try a direct media link.")
     seen.add(url)
     with downloader.urlopen(Request(url, extensions={"timeout": min(8, max(1, budget[2] - time.monotonic()))})) as response:
@@ -322,34 +372,38 @@ def discover(downloader, url: str, *, image_only=False, _seen=None, _budget=None
     candidates = []
     primary = parser.candidates
     # A metadata cover can be a static preview of an animated image in the
-    # body. Preserve both as explicit choices when no video/audio is declared.
-    images = [*parser.covers, *parser.images] if not primary else parser.covers
+    # body. Preserve both as explicit choices; the page's own pictures follow
+    # any declared video or audio as further choices.
+    covers = {value for value, _ in parser.covers}
     candidate_urls = set()
-    for value, kind in [*primary, *images]:
+    for value, kind in [*primary, *parser.covers, *parser.images, *parser.backgrounds]:
         if image_only and kind != "image":
             continue
-        candidate = _asset_url(base, value)
+        candidate = _asset_url(base, _unwrapped(value))
         if candidate and candidate not in candidate_urls and candidate != final:
-            variants = tuple(dict.fromkeys(filter(None, (_asset_url(base, variant) for variant in parser.variants.get(value, (value,))))))
-            candidates.append((candidate, kind, variants))
+            declared = parser.variants.get(value, (value,))
+            # Prefer the optimizer's original, keeping its resized copy as a fallback.
+            variants = tuple(dict.fromkeys(filter(None, (_asset_url(base, item) for variant in declared for item in (_unwrapped(variant), variant)))))
+            candidates.append((candidate, kind, variants, value in covers))
             candidate_urls.add(candidate)
-            if len(candidates) >= MAX_CANDIDATES:
+            if len(candidates) >= len(primary) + MAX_PAGE_IMAGES:
                 break
     if not candidates:
         if image_only:
             raise DownloadError("No readable image or thumbnail was declared on this page. Try a direct image URL.")
         raise DownloadError("No downloadable video, audio, or image was declared on this page. Try the media file or its original source-page link.")
     assets = []
+    small = set()
     failures = []
     has_primary = bool(parser.candidates) and not image_only
-    for candidate, kind, variants in candidates[:MAX_CANDIDATES]:
-        if budget[0] <= 0 or budget[1] >= 24 or time.monotonic() >= budget[2]:
+    for candidate, kind, variants, cover in candidates:
+        if budget[0] <= 0 or budget[1] >= MAX_REQUESTS or time.monotonic() >= budget[2]:
             break
         try:
             if kind == "image":
                 found = None
                 for variant in variants:
-                    if budget[0] <= 0 or budget[1] >= 24 or time.monotonic() >= budget[2]:
+                    if budget[0] <= 0 or budget[1] >= MAX_REQUESTS or time.monotonic() >= budget[2]:
                         break
                     try:
                         found = discover(downloader, variant, image_only=image_only, _seen=set(seen), _budget=budget)
@@ -380,6 +434,14 @@ def discover(downloader, url: str, *, image_only=False, _seen=None, _budget=None
                 assets.append((metadata, None))
             else:
                 for metadata, image_data in found:
+                    if kind == "image" and not cover:
+                        size = _image_size(image_data) if image_data else None
+                        if size and max(size) < MIN_IMAGE_SIDE:
+                            small.add(id(metadata))
+                        name = Path(unquote(urlsplit(candidate).path)).stem
+                        metadata.update(title=name or parser.title or metadata.get("title") or title, original_url=final, _unidown_page_image=True)
+                        assets.append((metadata, image_data))
+                        continue
                     metadata.update(title=parser.title or metadata.get("title") or title, original_url=final)
                     # A cover is kept as a thumbnail on the primary video. It
                     # must never replace an inaccessible stream on this page.
@@ -389,6 +451,9 @@ def discover(downloader, url: str, *, image_only=False, _seen=None, _budget=None
                     assets.append((metadata, image_data))
         except (DownloadError, RequestError, YtDlpError, OSError) as error:
             failures.append(error if isinstance(error, DownloadError) else extraction_error(error))
+    # Icons, avatars and spacers are left out when the page has real pictures.
+    if any(id(metadata) not in small for metadata, _ in assets):
+        assets = [(metadata, data) for metadata, data in assets if id(metadata) not in small]
     animated = [(metadata, data) for metadata, data in assets if data and check_image(data)[1]]
     if animated:
         assets = animated + [(metadata, data) for metadata, data in assets if not data or not check_image(data)[1]]

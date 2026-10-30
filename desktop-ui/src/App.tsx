@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import * as RadioGroupPrimitive from '@radix-ui/react-radio-group'
-import { ArrowDownToLine, ArrowRight, ArrowRightLeft, CircleAlert, FileImage, FileVideo, Link2, LoaderCircle, Music2, Upload, X } from 'lucide-react'
+import { ArrowDownToLine, ArrowRight, ArrowRightLeft, Check, CircleAlert, FileImage, FileVideo, Link2, LoaderCircle, Music2, Upload, X } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
 import { Label } from './components/ui/label'
@@ -58,6 +58,8 @@ export default function App() {
   const [checkedDraft, setCheckedDraft] = useState<string | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
   const [downloadBusy, setDownloadBusy] = useState(false)
+  const [marked, setMarked] = useState<{ inspection: string | null; ids: string[] }>({ inspection: null, ids: [] })
+  const [assetFilter, setAssetFilter] = useState<'all' | 'video' | 'image'>('all')
   const [dragging, setDragging] = useState<'files' | 'link' | null>(null)
   const normalizedUrl = normalizeUrlInput(url)
   const currentInspection = checkedDraft === normalizedUrl && state.inspection.url === normalizedUrl
@@ -82,6 +84,17 @@ export default function App() {
     : state.tools.message ? t(state.tools.message) : state.tools.error ? t(state.tools.error) : t(installing ? 'Installing media tools…' : 'Install media tools to enable downloads. Local image conversion is ready to use.')
   const canDownload = connected && toolsReady && ready && asset && kind && option && !downloadBusy && !busy
   const downloadable = assets.filter(item => item.kinds.some(entry => entry.options.length > 0))
+  // Pages often mix a video with many pictures; a filter and check marks keep large galleries manageable.
+  const isPicture = (item: MediaAsset) => item.default_kind === 'image'
+  const mixed = assets.some(isPicture) && assets.some(item => !isPicture(item))
+  const filter = mixed ? assetFilter : 'all'
+  const shown = assets.filter(item => filter === 'all' || (filter === 'image') === isPicture(item))
+  const markedIds = marked.inspection === state.inspection.id ? marked.ids.filter(id => downloadable.some(item => item.id === id)) : []
+  const shownDownloadable = shown.filter(item => downloadable.includes(item))
+  const toggleMark = (id: string) => setMarked(current => {
+    const ids = current.inspection === state.inspection.id ? current.ids : []
+    return { inspection: state.inspection.id, ids: ids.includes(id) ? ids.filter(item => item !== id) : [...ids, id] }
+  })
   const Icon = mediaIcon(kind?.id ?? '')
   const animation = Boolean(kind && option && option.id !== 'original' && optionCategory(kind, option.label) === 'animation')
   const hint = option ? option.id === 'original' ? t('Keeps the file exactly as published.') : formatHint(option.id, animation) : ''
@@ -108,14 +121,15 @@ export default function App() {
     await invoke('enqueue', state.inspection.id, asset.id, kind.id, option.id)
     setDownloadBusy(false)
   }
-  async function downloadAll() {
+  async function downloadMany(items: MediaAsset[]) {
     if (!connected || !toolsReady || !ready || downloadBusy || busy || !state.inspection.id) return
     setDownloadBusy(true)
-    for (const item of downloadable) {
+    for (const item of items) {
       const choice = defaultSelection(state.inspection.id, item)
       if (!await invoke('enqueue', state.inspection.id, item.id, choice.kind, choice.option)) break
     }
     setDownloadBusy(false)
+    setMarked({ inspection: null, ids: [] })
   }
   function changeKind(value: string) {
     if (!asset) return
@@ -196,14 +210,26 @@ export default function App() {
         {checking ? <div className="checking-state" role="status"><LoaderCircle className="size-4 animate-spin" />{t('Checking the link and available media…')}</div> : null}
         {inspectionError ? <div className="inspection-error" role="alert"><CircleAlert className="size-[18px] shrink-0" /><div><p>{t('Could not check this link')}</p><span>{t(inspectionError)}</span></div></div> : null}
         {ready && assets.length > 1 ? <div className="asset-picker">
-          <div className="asset-picker-heading"><span id="asset-picker-label">{t('{count} items at this link. Choose one, or download all.', { count: assets.length })}</span>
-            <Button variant="outline" size="sm" disabled={!connected || !toolsReady || downloadBusy || busy || downloadable.length === 0} onClick={() => void downloadAll()}><ArrowDownToLine />{t('Download all ({count})', { count: downloadable.length })}</Button></div>
+          <div className="asset-picker-heading"><span id="asset-picker-label">{t('{count} items at this link. Choose one to see its formats, or mark several.', { count: assets.length })}</span>
+            <div className="asset-picker-actions">
+              {markedIds.length ? <Button variant="ghost" size="sm" onClick={() => setMarked({ inspection: null, ids: [] })}>{t('Clear marks')}</Button>
+                : <Button variant="ghost" size="sm" disabled={shownDownloadable.length === 0} onClick={() => setMarked({ inspection: state.inspection.id, ids: shownDownloadable.map(item => item.id) })}>{t('Mark all')}</Button>}
+              <Button variant="outline" size="sm" disabled={!connected || !toolsReady || downloadBusy || busy || downloadable.length === 0}
+                onClick={() => void downloadMany(markedIds.length ? downloadable.filter(item => markedIds.includes(item.id)) : downloadable)}>
+                <ArrowDownToLine />{markedIds.length ? t('Download marked ({count})', { count: markedIds.length }) : t('Download all ({count})', { count: downloadable.length })}</Button></div></div>
+          {mixed ? <RadioGroupPrimitive.Root value={filter} onValueChange={value => setAssetFilter(value as typeof assetFilter)} aria-label={t('Show')} orientation="horizontal" className="asset-filter" loop>
+            {(['all', 'video', 'image'] as const).map(value => <RadioGroupPrimitive.Item key={value} value={value} className="format-chip">
+              {t(value === 'all' ? 'All ({count})' : value === 'video' ? 'Videos and audio ({count})' : 'Pictures ({count})', { count: assets.filter(item => value === 'all' || (value === 'image') === isPicture(item)).length })}</RadioGroupPrimitive.Item>)}
+          </RadioGroupPrimitive.Root> : null}
           <RadioGroupPrimitive.Root value={asset?.id ?? ''} onValueChange={value => { const next = assets.find(item => item.id === value); if (next) setSelection(defaultSelection(state.inspection.id, next)) }} aria-labelledby="asset-picker-label" className="asset-grid" loop>
-            {assets.map((item, index) => { const ItemIcon = mediaIcon(item.default_kind ?? ''); return <RadioGroupPrimitive.Item key={item.id} value={item.id} className="asset-card" aria-label={`${index + 1}. ${item.title}${item.description ? ` · ${t(item.description)}` : ''}`}>
-              {hasThumbnail(item) ? <img src={item.thumbnail ?? ''} alt="" /> : <span className="asset-card-placeholder"><ItemIcon className="size-6" aria-hidden="true" /></span>}
-              <span className="asset-card-index" aria-hidden="true">{index + 1}</span>
-              {item.description ? <small aria-hidden="true">{t(item.description)}</small> : null}
-            </RadioGroupPrimitive.Item> })}
+            {shown.map(item => { const index = assets.indexOf(item); const ItemIcon = mediaIcon(item.default_kind ?? ''); const isMarked = markedIds.includes(item.id); return <div key={item.id} className="asset-tile">
+              <RadioGroupPrimitive.Item value={item.id} className="asset-card" aria-label={`${index + 1}. ${item.title}${item.description ? ` · ${t(item.description)}` : ''}`}>
+                {hasThumbnail(item) ? <img src={item.thumbnail ?? ''} alt="" /> : <span className="asset-card-placeholder"><ItemIcon className="size-6" aria-hidden="true" /></span>}
+                {item.description ? <small aria-hidden="true">{t(item.description)}</small> : null}
+              </RadioGroupPrimitive.Item>
+              {downloadable.includes(item) ? <button type="button" role="checkbox" aria-checked={isMarked} className="asset-mark" data-marked={isMarked || undefined}
+                aria-label={t('Mark {title}', { title: `${index + 1}. ${item.title}` })} onClick={() => toggleMark(item.id)}>{isMarked ? <Check aria-hidden="true" /> : <span aria-hidden="true">{index + 1}</span>}</button> : null}
+            </div> })}
           </RadioGroupPrimitive.Root>
         </div> : null}
         {ready && asset ? <div className="inspected-result">

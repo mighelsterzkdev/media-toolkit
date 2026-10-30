@@ -101,7 +101,13 @@ def _read_information(downloader, url: str, *, image_only=False) -> tuple[dict, 
             # Generic extraction can mistake extensionless images and even
             # HTML pages ending in .mp4 for video. Check the actual response.
             if str((information or {}).get("extractor_key", "")).lower() in ("generic", "html5mediaembed"):
+                extracted = information
                 assets = discover(downloader, url, image_only=image_only)
+                # Pictures found on the page must not hide a stream yt-dlp found there;
+                # stream verification still drops it if it is not real media.
+                if (assets and not image_only and extracted and (extracted.get("formats") or extracted.get("url"))
+                        and all(data is not None for _, data in assets) and any(meta.get("_unidown_page_image") for meta, _ in assets)):
+                    assets = [(extracted, None), *assets]
             elif (information or {}).get("extractor_key") == "Twitter" and information.get("_type") == "playlist":
                 # A post with several photos or videos offers each one as a choice.
                 assets = [(entry, None) for entry in information.get("entries") or () if entry][:20] or None

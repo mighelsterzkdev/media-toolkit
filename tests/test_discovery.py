@@ -106,6 +106,7 @@ class DiscoveryTests(unittest.TestCase):
         Image.new("RGB", (80, 60), "yellow").save(cls.root / "cover.jpg")
         Image.new("RGB", (90, 70), "green").save(cls.root / "second.png")
         Image.new("RGB", (160, 120), "green").save(cls.root / "large.png")
+        Image.new("RGB", (32, 32), "white").save(cls.root / "icon.png")
         pages = {
             "img.html": '<img src="/animated.gif"><img src="/cover.jpg" width="16" height="16">',
             "structured.html": '<script type="application/ld+json">' + json.dumps({"@type": "ImageObject", "contentUrl": "/animated.gif"}) + '</script>',
@@ -131,6 +132,8 @@ class DiscoveryTests(unittest.TestCase):
             "delayed-refresh.html": '<meta http-equiv="refresh" content="30; url=/animated.gif"><p>This is a page, not an immediate redirect.</p>',
             "media-with-refresh.html": '<meta http-equiv="refresh" content="0; url=/animated.gif"><video src="/denied.mp4" poster="/cover.jpg"></video>',
             "refresh-loop.html": '<meta http-equiv="refresh" content="0; url=/refresh-loop.html">',
+            "gallery.html": '<img src="/icon.png"><img src="/_next/image?url=%2Flarge.png&amp;w=64&amp;q=75">'
+                            '<div style="background-image: url(\'/second.png\')"></div><link rel="preload" as="image" href="/cover.jpg">',
             "related-link.html": '<p>Related links:</p><a href="https://www.google.com/imgres?imgurl=https://example.com/related.gif">Another image</a>',
         }
         for name, body in pages.items():
@@ -140,6 +143,7 @@ class DiscoveryTests(unittest.TestCase):
             suffix = ".exe" if (cls.tools / "ffmpeg.exe").is_file() else ""
             cls.ffprobe = cls.tools / f"ffprobe{suffix}"
             subprocess.run([str(cls.tools / f"ffmpeg{suffix}"), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=red:size=80x60:rate=10", "-t", "0.3", "-c:v", "libx264", str(cls.root / "clip.mp4")], check=True, capture_output=True, timeout=30)
+            (cls.root / "video-gallery.html").write_text('<html><video><source src="/clip.mp4"></video><img src="/large.png"><img src="/second.png"></html>', encoding="utf-8")
             (cls.root / "video.html").write_text('<html><meta property="og:image" content="/cover.jpg"><video><source src="/clip.mp4"></video></html>', encoding="utf-8")
         handler = functools.partial(_Handler, directory=str(cls.root))
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -151,6 +155,19 @@ class DiscoveryTests(unittest.TestCase):
     def inspect(self, path, **kwargs):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return inspect_media(self.base + path, **kwargs)
+
+    def test_page_pictures_form_a_gallery_of_originals_without_icons(self):
+        inspected = self.inspect("/gallery.html")
+        # The Next.js optimizer copy is replaced by its original; CSS and preloaded pictures count too.
+        self.assertEqual({asset.image_dimensions for asset in inspected.alternatives}, {(160, 120), (90, 70), (80, 60)})
+        self.assertEqual([asset.information["title"] for asset in inspected.alternatives], ["large", "second", "cover"])
+
+    def test_page_video_keeps_its_pictures_as_further_choices(self):
+        if not self.tools:
+            self.skipTest("FFmpeg is not installed")
+        inspected = self.inspect("/video-gallery.html")
+        self.assertIn("video", inspected.alternatives[0].kinds)
+        self.assertEqual([asset.image_dimensions for asset in inspected.alternatives[1:]], [(160, 120), (90, 70)])
 
     def test_direct_extensionless_redirected_and_embedded_gifs_keep_animation(self):
         for path in ("/animated.gif", "/extensionless", "/redirect", "/img.html", "/structured.html", "/misleading.mp4"):

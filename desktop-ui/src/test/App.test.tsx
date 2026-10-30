@@ -545,6 +545,30 @@ describe('posts, queue covers, language and drag and drop', () => {
     expect(vi.mocked(api.enqueue).mock.calls.every(call => call[3] === 'original')).toBe(true)
   })
 
+  it('filters a page that mixes a video with pictures and downloads only the marked ones', async () => {
+    const { api, reply } = fixture()
+    const video = { id: 'clip', title: 'Page video', description: '1920 × 1080', thumbnail: null, default_kind: 'video',
+      kinds: [{ id: 'video', label: 'Video', options: [{ id: 'original', label: 'Original', description: 'Best available quality', recommended: true }] }] }
+    api.check_url = vi.fn((checked: string) => reply({ inspection: { status: 'ready', id: 'page', url: checked, error: null, assets: [video, photo(1), photo(2), photo(3)] } }))
+    const user = userEvent.setup()
+    render(<App />)
+    await waitFor(() => expect(screen.getByLabelText('Media URL')).toBeEnabled())
+    await user.type(screen.getByLabelText('Media URL'), url)
+    await user.click(screen.getByRole('button', { name: 'Check' }))
+    const grid = await screen.findByRole('radiogroup', { name: /4 items at this link/ })
+    await user.click(screen.getByRole('radio', { name: 'Pictures (3)' }))
+    expect(within(grid).getAllByRole('radio')).toHaveLength(3)
+    await user.click(screen.getByRole('checkbox', { name: 'Mark 2. Post #1' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Mark 4. Post #3' }))
+    expect(screen.getByRole('checkbox', { name: 'Mark 2. Post #1' })).toBeChecked()
+    await user.click(screen.getByRole('button', { name: 'Download marked (2)' }))
+    await waitFor(() => expect(api.enqueue).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(api.enqueue).mock.calls.map(call => call[1])).toEqual(['photo-1', 'photo-3'])
+    expect(await screen.findByRole('button', { name: 'Download all (4)' })).toBeEnabled()
+    await user.click(screen.getByRole('radio', { name: 'Videos and audio (1)' }))
+    expect(within(grid).getAllByRole('radio')).toHaveLength(1)
+  })
+
   it('shows the cover image of a queued download', async () => {
     const { update } = fixture()
     update({ tasks: [{ id: 'covered', url, title: 'With cover', kind: 'image', format: 'original', status: 'completed', progress: 100, downloaded_bytes: 1, total_bytes: 1, speed: null, eta: null, path: 'C:\\Downloads\\a.png', error: null, thumbnail: pixel }] })

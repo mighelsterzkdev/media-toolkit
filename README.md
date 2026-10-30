@@ -11,6 +11,7 @@ A desktop app with two tools: **Download** saves media from a URL in its origina
 
 - **Automatic updates.** Once a day the app checks this repository's releases. A notice offers **Update**; the ZIP is checked against the release's `SHA256SUMS.txt`, and **Restart to update** installs it in the same folder. Downloads, `.tools` and settings are kept, shortcuts keep working, and nothing downloads or restarts without a click. **Settings → Check for updates** checks right away.
 - Every photo of an X post is offered, and **Download all** saves them together.
+- Ordinary web pages show every picture they publish as a gallery, in original size (images behind Next.js optimizers and CSS backgrounds too), next to any video on the page. Icons and avatars are left out. Filter videos or pictures, mark several, and **Download marked**.
 - Format chips for choosing what to save or convert; Portuguese (Brazil) and English interface.
 - Drop files on the window to convert them; drop links on the Download tab. Queue items show a cover image.
 - Light, dark and system themes with a custom title bar, taskbar progress, a Windows notification when the queue finishes, and an app icon.
