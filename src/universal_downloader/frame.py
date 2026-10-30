@@ -34,8 +34,9 @@ COMMANDS = {"minimize": SC_MINIMIZE, "close": SC_CLOSE}
 ACTIONS = frozenset((*HIT_TESTS, *COMMANDS, "maximize"))
 
 LRESULT = ctypes.c_ssize_t
+# WINFUNCTYPE exists only on Windows; the module must still import elsewhere.
 SUBCLASSPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
-                                  wintypes.LPARAM, ctypes.c_size_t, ctypes.c_size_t)
+                                  wintypes.LPARAM, ctypes.c_size_t, ctypes.c_size_t) if os.name == "nt" else None
 
 
 class _NCCALCSIZE_PARAMS(ctypes.Structure):
