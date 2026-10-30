@@ -1,10 +1,13 @@
 """Provider adapters preserve source metadata before generic media inspection."""
 
+import re
 from urllib.parse import urlsplit
 
 from yt_dlp.extractor.twitter import TwitterIE
 
 from .tiktok import TikTokAudioIE
+
+_PHOTO_SUFFIX = re.compile(r"/photo/\d+/?(?=$|[?#])")
 
 
 class _TwitterMediaIE(TwitterIE):
@@ -25,6 +28,9 @@ class _TwitterMediaIE(TwitterIE):
 
     def _real_extract(self, url):
         self._media_types = {}
+        # Share links name one photo (/photo/1). yt-dlp reads that suffix as a
+        # video selection and rejects photos, so inspect the whole post instead.
+        url = _PHOTO_SUFFIX.sub("", url, count=1)
         result = super()._real_extract(url)
         entries = result.get("entries") if isinstance(result.get("entries"), list) else [result]
         for entry in entries:
