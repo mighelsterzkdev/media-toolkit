@@ -25,7 +25,7 @@ from .desktop_queue_store import DesktopQueueStore, RESTORED_MESSAGE, conversion
 from .desktop_worker import ProcessWorker
 from .errors import DownloadError
 from .limits import validate_download_source_limits, validate_limits
-from .preferences import THEMES, load_preferences, load_theme, save_preferences, save_theme
+from .preferences import LANGUAGES, THEMES, load_appearance, load_preferences, save_appearance, save_preferences
 from .queue import MAX_BATCH_BYTES, MAX_QUEUE_URLS, MAX_URL_LENGTH, validated_urls
 from .resume import pending_resumes
 from .urls import validate_url
@@ -86,6 +86,28 @@ def _thumbnail(inspected):
                 image.save(buffer, "PNG", optimize=True)
                 data = buffer.getvalue()
             return "data:image/png;base64," + base64.b64encode(data).decode("ascii") if len(data) <= 102_400 else None
+        finally:
+            image.close()
+    except (OSError, ValueError, Image.DecompressionBombError):
+        return None
+
+
+def _task_thumbnail(inspected):
+    """A small square cover for the queue row. It is display-only and never persisted."""
+    if inspected is None or not inspected.image_data:
+        return None
+    try:
+        with Image.open(BytesIO(inspected.image_data)) as source:
+            if source.width * source.height > 40_000_000:
+                return None
+            source.seek(0)
+            source.draft("RGB", (192, 192))
+            with ImageOps.exif_transpose(source) as oriented:
+                image = ImageOps.fit(oriented.convert("RGB"), (96, 96), Image.Resampling.LANCZOS)
+        try:
+            buffer = BytesIO()
+            image.save(buffer, "JPEG", quality=82)
+            return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
         finally:
             image.close()
     except (OSError, ValueError, Image.DecompressionBombError):
@@ -168,7 +190,7 @@ class DesktopService:
             saved = {}
             self._notice = safe_error(error)
         self._settings = {"output": str(Path(saved.get("output") or default_output or PROJECT_ROOT / "downloads").expanduser().resolve()), "max_height": saved.get("max_height"), "max_size": saved.get("max_size")}
-        self._theme = load_theme()
+        self._theme, self._language = load_appearance()
         self._queue_store = DesktopQueueStore(default_output, queue_scope=queue_scope)
         self._tasks = self._queue_store.load()
         if self._queue_store.notice:
@@ -206,7 +228,7 @@ class DesktopService:
                     self._resume_count = 0
                 self._resume_time = time.monotonic()
             tasks = [{key: value for key, value in task.items() if not key.startswith("_")} for task in self._tasks]
-            return deepcopy({"version": __version__, "settings": self._settings, "inspection": self._inspection, "conversion": self._conversion, "tasks": tasks, "notice": self._notice, "resume_count": self._resume_count, "theme": self._theme})
+            return deepcopy({"version": __version__, "settings": self._settings, "inspection": self._inspection, "conversion": self._conversion, "tasks": tasks, "notice": self._notice, "resume_count": self._resume_count, "theme": self._theme, "language": self._language})
 
     def check_url(self, url):
         if not isinstance(url, str) or len(url) > MAX_URL_LENGTH:
@@ -477,7 +499,7 @@ class DesktopService:
                 "action": "download", "source_format": None, "can_convert": False,
                 "kind": kind, "format": output_format, "status": "queued", "progress": None,
                 "downloaded_bytes": 0, "total_bytes": None, "speed": None, "eta": None, "path": None, "error": None, "operation": None,
-                "_identity": identity, "_settings": settings, "_inspected": inspected,
+                "thumbnail": _task_thumbnail(inspected), "_identity": identity, "_settings": settings, "_inspected": inspected,
                 "_selection": selection, "_attempt": None}
         self._tasks.append(task)
         return task
@@ -705,14 +727,33 @@ class DesktopService:
             self.cancel_check()
         return self.get_state()
 
+    def set_notice(self, message):
+        with self._lock:
+            self._notice = _text(message, 600) if message else None
+
     def set_theme(self, theme):
         if theme not in THEMES:
             raise DownloadError("Choose a supported theme.")
         with self._lock:
             self._ensure_open()
             self._theme = theme
-        save_theme(theme)
+            language = self._language
+        save_appearance(theme, language)
         return self.get_state()
+
+    def set_language(self, language):
+        if language not in LANGUAGES:
+            raise DownloadError("Choose a supported language.")
+        with self._lock:
+            self._ensure_open()
+            self._language = language
+            theme = self._theme
+        save_appearance(theme, language)
+        return self.get_state()
+
+    def language(self):
+        with self._lock:
+            return self._language
 
     def theme(self):
         with self._lock:

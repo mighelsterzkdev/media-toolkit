@@ -1,3 +1,4 @@
+import type { Language } from './i18n'
 export type Theme = 'system' | 'dark' | 'light'
 export interface Settings { output: string; max_height: number | null; max_size: number | null }
 export interface MediaOption { id: string; label: string; description: string; recommended: boolean }
@@ -25,11 +26,11 @@ export interface DownloadTask {
   progress: number | null; downloaded_bytes: number; total_bytes: number | null; speed: number | null;
   eta: number | null; path: string | null; error: string | null;
   action?: 'download' | 'convert'; source_format?: string | null; can_convert?: boolean;
-  operation?: 'preparing' | 'encoding' | 'copying' | null
+  operation?: 'preparing' | 'encoding' | 'copying' | null; thumbnail?: string | null
 }
 export interface DesktopState {
   version: string; settings: Settings; inspection: Inspection; conversion: Conversion; tasks: DownloadTask[]; notice: string | null;
-  resume_count: number; theme?: Theme; tools: { status: 'ready' | 'missing' | 'installing' | 'failed'; message?: string; error?: string | null; ffmpeg?: boolean; javascript?: boolean }
+  resume_count: number; theme?: Theme; language?: Language; tools: { status: 'ready' | 'missing' | 'installing' | 'failed'; message?: string; error?: string | null; ffmpeg?: boolean; javascript?: boolean }
 }
 export type ApiResult = { ok: true; state: DesktopState } | { ok: false; error: string }
 export interface DesktopApi {
@@ -52,6 +53,7 @@ export interface DesktopApi {
   enqueue_conversions(ids: string[], target: ConversionFormat, background: '#FFFFFF' | '#000000'): Promise<ApiResult>;
   prepare_conversion(taskId: string): Promise<ApiResult>;
   set_theme(theme: Theme): Promise<ApiResult>;
+  set_language(language: Language): Promise<ApiResult>;
   window_action?(action: WindowAction): Promise<{ ok: true } | { ok: false; error: string }>;
 }
 export type ResizeEdge = 'top' | 'bottom' | 'left' | 'right' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'

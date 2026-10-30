@@ -24,10 +24,14 @@ class _TwitterMediaIE(TwitterIE):
                 identifier = media.get("id_str") or media.get("id")
                 if identifier is not None and media.get("type"):
                     self._media_types[str(identifier)] = media["type"]
+                if (identifier is not None and media.get("type") == "photo" and (source := media.get("media_url_https"))
+                        and str(identifier) not in {photo[0] for photo in self._photos}):
+                    self._photos.append((str(identifier), source, media.get("original_info") or {}))
         return status
 
     def _real_extract(self, url):
         self._media_types = {}
+        self._photos = []
         # Share links name one photo (/photo/1). yt-dlp reads that suffix as a
         # video selection and rejects photos, so inspect the whole post instead.
         url = _PHOTO_SUFFIX.sub("", url, count=1)
@@ -36,7 +40,30 @@ class _TwitterMediaIE(TwitterIE):
         for entry in entries:
             if media_type := self._media_types.get(str(entry.get("id"))):
                 entry["media_type"] = media_type
-        return result
+        if not self._photos or self._match_valid_url(url).group("index"):
+            return result
+        # Without attached videos yt-dlp follows the first link in the text;
+        # the post's own photos are what the link refers to.
+        return self._with_photos(result, [] if result.get("_type") == "url" else entries)
+
+    def _with_photos(self, result, entries):
+        """yt-dlp skips photos; offer each one at original size beside any videos."""
+        videos = [entry for entry in entries if entry.get("formats")]
+        base = {key: value for key, value in result.items() if key not in ("_type", "url", "ie_key", "entries", "formats", "thumbnails", "thumbnail", "duration", "subtitles")}
+        title = re.sub(r" #\d+$", "", base.get("title") or "")
+        count = len(videos) + len(self._photos)
+        photos = []
+        for index, (identifier, source, size) in enumerate(self._photos, len(videos) + 1):
+            stem, dot, extension = source.rpartition(".")
+            original = f"{stem}?format={extension}&name=orig" if dot and "/" not in extension else source
+            photos.append({
+                **base, "id": identifier, "title": f"{title} #{index}" if count > 1 else title,
+                "media_type": "photo", "image_url": original,
+                "thumbnails": [{"url": original, "width": size.get("width"), "height": size.get("height")}],
+            })
+        if count == 1:
+            return photos[0]
+        return self.playlist_result([*videos, *photos], base.get("id"), title, base.get("description"))
 
 
 def configure_sources(downloader) -> None:

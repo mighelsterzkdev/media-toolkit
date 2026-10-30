@@ -1,3 +1,5 @@
+import { t } from './i18n'
+
 export function bytes(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value) || value < 0) return '—'
   if (value < 1024) return `${Math.round(value)} B`
@@ -6,8 +8,8 @@ export function bytes(value: number | null | undefined): string {
 }
 export function duration(value: number | null): string {
   if (value == null || !Number.isFinite(value) || value < 0) return ''
-  if (value < 60) return `${Math.ceil(value)}s left`
-  return `${Math.floor(value / 60)}m ${Math.ceil(value % 60)}s left`
+  if (value < 60) return t('{seconds}s left', { seconds: Math.ceil(value) })
+  return t('{minutes}m {seconds}s left', { minutes: Math.floor(value / 60), seconds: Math.ceil(value % 60) })
 }
 export function sourceHost(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, '') } catch { return '' }

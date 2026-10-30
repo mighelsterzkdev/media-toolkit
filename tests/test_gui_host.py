@@ -31,6 +31,20 @@ class DesktopBridgeTests(unittest.TestCase):
                 json.dumps(response)
                 getattr(self.service, method).assert_called_with(*args)
 
+    def test_dropped_files_go_to_the_converter_by_their_native_paths(self):
+        self.api._drop({"dataTransfer": {"files": [
+            {"name": "a.png", "pywebviewFullPath": r"C:\media\a.png"}, {"name": "link"}, "not a file",
+        ]}})
+        self.service.add_conversion_files.assert_called_once_with([r"C:\media\a.png"])
+        self.service.add_conversion_files.reset_mock()
+        self.api._drop({"dataTransfer": {"files": []}})
+        self.service.add_conversion_files.assert_not_called()
+
+    def test_a_rejected_drop_is_reported_as_a_notice(self):
+        self.service.add_conversion_files.side_effect = DownloadError("Choose between 1 and 100 media files.")
+        self.api._drop({"dataTransfer": {"files": [{"pywebviewFullPath": r"C:\media\a.png"}]}})
+        self.service.set_notice.assert_called_once_with("Choose between 1 and 100 media files.")
+
     def test_unexpected_state_errors_do_not_leak_sensitive_exception_text(self):
         self.service.get_state.side_effect = RuntimeError("credential=secret C:/private/folder")
         response = self.api.get_state()

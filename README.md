@@ -12,10 +12,13 @@ A desktop app with two tools: **Download** saves media from a URL in its origina
 Open **start.cmd** for the dark desktop interface. The project launcher uses the current portable release when present, otherwise the local source environment. It uses bundled React and shadcn/ui components inside Microsoft Edge WebView2; it does not need Node.js or an external website at runtime.
 
 1. In **Download**, paste a URL and click **Check**. Inspection can be cancelled.
-2. Select a verified media item, choose **Original — Recommended** or an available conversion, and click **Download**.
+2. Select a verified media item, choose **Original** or an available conversion, and click **Download**. A post with several photos or videos (an X post, for example) shows each one as a card; **Download all** queues every item in its original format.
 3. Follow progress in the queue. Cancel a running/queued item, retry a failed or cancelled item, or open a completed item's folder.
 4. Use **Add multiple links** for several URLs. This explicitly queues each link's recommended original; ambiguous pages report that they need individual selection.
 5. Use **Browse** to select the download folder and **Settings** for optional limits. These use the same remembered preferences as the terminal.
+6. Drop a link anywhere on the window to check it, or drop files to open them in **Convert**.
+
+The interface is available in Portuguese (Brazil) and English; the **PT/EN** button switches language, which starts matching Windows. While work runs, the taskbar button shows progress, and Windows shows a notification when the queue finishes in the background.
 
 Checks, downloads and conversions run in contained worker processes. Cancelling or closing stops the worker and its child tools without freezing the window. The desktop queue is saved locally and restored when the app reopens. Unfinished tasks wait for an explicit **Retry**; reopening the app does not start downloads or conversions. Supported interrupted transfers reuse verified partial work. Restored selected media is checked again before retry; ambiguous or changed selections require checking the link again instead of choosing another item.
 
@@ -23,7 +26,7 @@ The desktop app is tested on Windows x64 and requires the [Microsoft Edge WebVie
 
 **start.cmd** with arguments still forwards them to the terminal, so existing scripts continue to work. For the interactive terminal, run `.venv\Scripts\python.exe -B -m universal_downloader` from source or `unidown.exe` from the portable folder. The installed commands are `media-toolkit` for the desktop and `unidown` for the terminal. `unidown-gui` remains a compatible desktop alias.
 
-The Download **Save as** dropdown uses the same image, audio and video encoders as Convert. It lists compatible formats for the selected media type, including AVIF, WebP, TIFF and JPEG 2000 images, FLAC, WAV and Opus audio, and MKV, MOV and WebM video. **Original** stays recommended when an available source meets the selected limits. Unsupported encoders and unnecessary image copies are omitted; ICO requires a square image up to 256 pixels. An audio/video compatibility conversion can share the source extension: an M4A file can contain ALAC rather than AAC, for example. Conversion checks the actual downloaded codecs before copying or encoding streams. Static-image downloads use white when flattening transparency; Convert also lets you choose black.
+The Download **Save as** choices use the same image, audio and video encoders as Convert. It lists compatible formats for the selected media type, including AVIF, WebP, TIFF and JPEG 2000 images, FLAC, WAV and Opus audio, and MKV, MOV and WebM video. **Original** stays recommended when an available source meets the selected limits. Unsupported encoders and unnecessary image copies are omitted; ICO requires a square image up to 256 pixels. An audio/video compatibility conversion can share the source extension: an M4A file can contain ALAC rather than AAC, for example. Conversion checks the actual downloaded codecs before copying or encoding streams. Static-image downloads use white when flattening transparency; Convert also lets you choose black.
 
 Animated GIF, WebP and APNG sources retain their frames in compatible animation outputs. A height limit can resize these sources to GIF, animated WebP, APNG or MP4 when the encoder supports the resulting dimensions. Videos, including social GIFs delivered as MP4, also offer GIF, animated WebP and APNG through the shared conversion engine. The height limit applies consistently to MP4, MKV, MOV, WebM and video-to-animation outputs. Still-image formats are not offered for moving sources. The terminal retains its existing conversion choices, documented below.
 
@@ -66,7 +69,7 @@ Downloads go into the extracted folder's `downloads` directory when launched thr
 
 ```powershell
 # Check the ZIP against the published checksum before extraction
-Get-FileHash .\media-toolkit-0.11.5-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\media-toolkit-0.12.0-windows-x64.zip -Algorithm SHA256
 
 # Prepare the external tools without opening the menu
 .\unidown.exe --install-tools
@@ -287,8 +290,8 @@ Run on Windows x64 using a separate build environment:
 python -B -m venv .tools/build-env
 .\.tools\build-env\Scripts\python.exe -B -m pip install -c constraints.txt -e ".[desktop]" pyinstaller==6.22.3
 .\.tools\build-env\Scripts\python.exe -B scripts/build_windows_gui.py --output dist
-.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/media-toolkit-0.11.5-windows-x64/unidown.exe --bootstrap
-.\.tools\build-env\Scripts\python.exe -B scripts/verify_desktop.py dist/media-toolkit-0.11.5-windows-x64/media-toolkit.exe
+.\.tools\build-env\Scripts\python.exe -B scripts/verify_portable.py dist/media-toolkit-0.12.0-windows-x64/unidown.exe --bootstrap
+.\.tools\build-env\Scripts\python.exe -B scripts/verify_desktop.py dist/media-toolkit-0.12.0-windows-x64/media-toolkit.exe
 ```
 
 Use a new output directory for each build. The desktop build produces both executables, their separate library folders, a complete ZIP, and `SHA256SUMS.txt`. `scripts/build_windows.py` remains available for a terminal-only ZIP. The committed frontend assets and notices are included without installing Node.js on the build machine. A source/output fingerprint rejects stale, changed or missing frontend assets before packaging; after editing the interface, run `pnpm install --frozen-lockfile` and `pnpm build` in `desktop-ui`. CI also rebuilds and compares them. The build checks the executable archive to exclude optional Mutagen and build-time PyInstaller modules. The verifier removes Python and external tools from PATH, checks the bundled executable, preserves local image/video originals, converts GIF animation to H.264 MP4, extracts original AAC audio, converts MP3, verifies cached reuse, runs a link queue, checks remembered preferences, and terminates/restarts a real frozen HTTP download to verify continuation. Its temporary download history is isolated from the user's history. The **Build portable Windows release** workflow builds and checks the same artifacts on tagged versions or manual runs; it does not publish a release automatically.

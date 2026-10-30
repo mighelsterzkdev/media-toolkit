@@ -79,7 +79,7 @@ def build(output: Path) -> Path:
         command = [
             sys.executable, "-B", "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--windowed",
             "--name", "media-toolkit", "--contents-directory", "_desktop",
-            "--manifest", str(ROOT / "scripts/windows_gui.manifest"),
+            "--manifest", str(ROOT / "scripts/windows_gui.manifest"), "--icon", str(ROOT / "assets/media-toolkit.ico"),
             "--distpath", str(working / "dist"), "--workpath", str(working / "work"), "--specpath", str(working),
             "--paths", str(ROOT), "--collect-all", "yt_dlp", "--collect-all", "yt_dlp_ejs", "--collect-all", "PIL",
             "--collect-data", "webview", "--collect-binaries", "webview",

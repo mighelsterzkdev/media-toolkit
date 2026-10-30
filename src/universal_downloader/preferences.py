@@ -78,6 +78,7 @@ def save_preferences(values: dict) -> Path:
 
 
 THEMES = ("system", "dark", "light")
+LANGUAGES = ("system", "pt", "en")
 
 
 def _appearance_path() -> Path:
@@ -85,32 +86,36 @@ def _appearance_path() -> Path:
     return preferences_path().with_name("appearance.json")
 
 
-def load_theme() -> str:
+def load_appearance() -> tuple[str, str]:
+    """Return the saved (theme, language); unknown values fall back to the system's."""
     try:
         with _appearance_path().open("rb") as source:
             data = source.read(4097)
         value = json.loads(data.decode("utf-8")) if len(data) <= 4096 else None
-        theme = value.get("theme") if isinstance(value, dict) else None
-        return theme if theme in THEMES else "system"
+        value = value if isinstance(value, dict) else {}
+        theme, language = value.get("theme"), value.get("language")
+        return theme if theme in THEMES else "system", language if language in LANGUAGES else "system"
     except (OSError, ValueError, UnicodeError):
-        return "system"
+        return "system", "system"
 
 
-def save_theme(theme: str) -> None:
+def save_appearance(theme: str, language: str) -> None:
     if theme not in THEMES:
         raise DownloadError("Choose a supported theme.")
+    if language not in LANGUAGES:
+        raise DownloadError("Choose a supported language.")
     destination = _appearance_path()
     temporary = None
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(prefix=".appearance-", suffix=".tmp", dir=destination.parent, delete=False) as output:
             temporary = Path(output.name)
-            output.write((json.dumps({"version": 1, "theme": theme}) + "\n").encode("utf-8"))
+            output.write((json.dumps({"version": 1, "theme": theme, "language": language}) + "\n").encode("utf-8"))
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, destination)
     except OSError as error:
-        raise DownloadError("The theme changed, but it could not be saved.") from error
+        raise DownloadError("The appearance changed, but it could not be saved.") from error
     finally:
         if temporary is not None:
             try:

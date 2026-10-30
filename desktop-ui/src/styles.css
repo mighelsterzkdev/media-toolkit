@@ -170,6 +170,32 @@
   .download-target-field > label, .conversion-target-field > label { @apply w-20 shrink-0; }
   .download-target-field > button, .conversion-target-field > button { @apply w-72 max-w-full; }
   .conversion-format-count { @apply text-sm text-muted-foreground; }
+  .format-field { @apply flex flex-wrap items-start gap-x-4 gap-y-2; }
+  .format-field-label { @apply w-28 shrink-0 whitespace-nowrap pt-2 text-sm font-medium leading-5; }
+  .format-groups { @apply min-w-0 flex-1 space-y-2; }
+  .format-group { @apply flex flex-wrap items-center gap-2; }
+  .format-group-label { @apply w-full text-xs font-medium uppercase tracking-wide text-muted-foreground; }
+  .format-chips { @apply flex flex-wrap gap-1.5; }
+  .format-chip { @apply inline-flex h-9 min-w-[3.5rem] items-center justify-center gap-1.5 rounded-md border border-input bg-transparent px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50; }
+  .format-chip[data-state="checked"] { @apply border-foreground bg-foreground text-background hover:bg-foreground hover:text-background; }
+  .format-chip small { @apply text-xs font-normal opacity-70; }
+  .asset-picker-heading { @apply flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground; }
+  .asset-grid { @apply grid max-h-72 grid-cols-[repeat(auto-fill,minmax(112px,1fr))] gap-2 overflow-y-auto p-0.5; }
+  .asset-card { @apply relative aspect-square overflow-hidden rounded-md border bg-muted text-muted-foreground outline-none transition-[box-shadow,border-color] hover:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background; }
+  .asset-card[data-state="checked"] { @apply border-foreground ring-2 ring-foreground; }
+  .asset-card > img, .asset-card-placeholder { @apply absolute inset-0 grid size-full place-items-center object-cover; }
+  .asset-card-index { @apply absolute left-1.5 top-1.5 grid size-6 place-items-center rounded-full bg-background/85 text-xs font-semibold text-foreground; }
+  .asset-card[data-state="checked"] .asset-card-index { @apply bg-foreground text-background; }
+  .asset-card small { @apply absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/75 to-transparent px-2 pb-1.5 pt-4 text-left text-[11px] text-white; }
+  .drop-hint { @apply my-4 flex items-center gap-4 rounded-lg border border-dashed px-4 py-5 text-muted-foreground; }
+  .drop-hint p { @apply text-sm font-medium text-foreground; }
+  .drop-hint span { @apply text-sm; }
+  .drop-overlay { @apply pointer-events-none fixed inset-2 z-50 grid place-items-center rounded-xl border-2 border-dashed border-foreground/40 bg-background/85 backdrop-blur-sm; }
+  .drop-overlay > div { @apply flex flex-col items-center gap-3 text-base font-medium; }
+  .task-thumbnail { @apply relative overflow-visible bg-transparent; }
+  .task-thumbnail > img { @apply size-10 rounded-md border object-cover; }
+  .task-status-badge { @apply absolute -bottom-1 -right-1 grid size-[18px] place-items-center rounded-full border bg-background; }
+  .language-toggle { @apply text-xs font-semibold tracking-wide; }
   .conversion-file-copy > .conversion-file-skip { @apply text-warning; }
   .alpha-background { @apply flex flex-wrap items-center gap-x-4 gap-y-2; }
   .alpha-background > label { @apply w-20 shrink-0; }

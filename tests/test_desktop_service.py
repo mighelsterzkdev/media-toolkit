@@ -211,6 +211,24 @@ class DesktopServiceTests(unittest.TestCase):
         self.addCleanup(again.shutdown)
         self.assertEqual(again.get_state()["theme"], "system")
 
+    def test_language_is_validated_and_kept_with_the_theme(self):
+        self.assertEqual(self.service.get_state()["language"], "system")
+        for language in ("fr", None, "../pt"):
+            with self.assertRaises(DownloadError):
+                self.service.set_language(language)
+        self.service.set_theme("dark")
+        self.assertEqual(self.service.set_language("pt")["language"], "pt")
+        restarted = self.restart()
+        self.assertEqual((restarted["theme"], restarted["language"]), ("dark", "pt"))
+
+    def test_queued_download_shows_a_small_cover_that_is_not_persisted(self):
+        inspection = self.inspect()
+        state = self.enqueue_inspected(inspection)
+        thumbnail = state["tasks"][0]["thumbnail"]
+        self.assertTrue(thumbnail.startswith("data:image/jpeg;base64,"))
+        self.assertLess(len(thumbnail), 12_000)
+        self.assertNotIn("thumbnail", self.restart()["tasks"][0])
+
     def test_checked_original_requires_explicit_enqueue_and_returns_private_raster_preview(self):
         inspection = self.inspect()
         state = self.service.get_state()

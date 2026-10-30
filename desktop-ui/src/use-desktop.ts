@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { initialState, type DesktopApi, type DesktopState } from './types'
+import { t } from './i18n'
 
 // Window actions are fire-and-forget and never return desktop state.
 type Method = Exclude<keyof DesktopApi, 'window_action'>
@@ -33,7 +34,7 @@ export function useDesktop() {
               setConnected(true)
               failures = 0
             } else {
-              setError(result.error)
+              setError(t(result.error))
               setConnected(false)
               failures += 1
             }
@@ -76,9 +77,9 @@ export function useDesktop() {
         const result = await apiMethod(...args)
         if (!alive.current) return null
         if (result.ok) { setState(result.state); setConnected(true); return result.state }
-        setError(result.error)
+        setError(t(result.error))
       } catch {
-        if (alive.current) setError('The desktop connection was interrupted. Please try again.')
+        if (alive.current) setError(t('The desktop connection was interrupted. Please try again.'))
       } finally {
         occupied.current = false
         if (alive.current) setPending(null)

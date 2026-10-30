@@ -16,7 +16,7 @@ import sys
 import threading
 from urllib.parse import unquote, urlsplit
 
-from . import APP_NAME, __version__, frame
+from . import APP_NAME, __version__, frame, shell
 from .dependencies import PROJECT_ROOT, find_ffmpeg, find_js_runtime
 from .errors import DownloadError
 from .preferences import preferences_path
@@ -148,6 +148,19 @@ class DesktopApi:
         if response["ok"] and self._window is not None:
             _apply_titlebar(self._window, _uses_dark_titlebar(theme))
         return response
+
+    def set_language(self, language):
+        return self._call(self._service.set_language, language)
+
+    def _drop(self, event):
+        """Files dropped on the window go to the converter; links are handled by the page."""
+        try:
+            files = (event.get("dataTransfer") or {}).get("files") or []
+            paths = [item["pywebviewFullPath"] for item in files if isinstance(item, dict) and isinstance(item.get("pywebviewFullPath"), str)]
+            if paths and not self._closed:
+                self._service.add_conversion_files(paths[:100])
+        except Exception as error:
+            self._service.set_notice(_safe_error(error))
 
     def browse_folder(self):
         def browse():
@@ -425,6 +438,47 @@ def _enable_per_monitor_dpi():
         return False
 
 
+_NOTICES = {
+    "pt": {"done": ("Tudo pronto", "{count} tarefa(s) concluída(s)."), "failed": ("Algumas tarefas falharam", "{done} concluída(s), {failed} com falha.")},
+    "en": {"done": ("All done", "{count} task(s) finished."), "failed": ("Some tasks failed", "{done} finished, {failed} failed.")},
+}
+_RUNNING = frozenset(("queued", "checking", "downloading", "converting", "finalizing", "cancelling"))
+
+
+def _watch(service, feedback, stop):
+    """Mirror the queue on the taskbar; notify once the queue finishes."""
+    finished = {}
+    while not stop.wait(0.5):
+        try:
+            tasks = service.get_state()["tasks"]
+        except Exception:
+            continue
+        running = [task for task in tasks if task["status"] in _RUNNING]
+        if running:
+            values = [task["progress"] for task in running if isinstance(task.get("progress"), (int, float))]
+            if values and len(values) == len(running):
+                feedback.progress(shell.NORMAL, sum(values) / len(values) / 100)
+            else:
+                feedback.progress(shell.INDETERMINATE)
+            for task in running:
+                finished.setdefault(task["id"], None)
+            continue
+        feedback.progress(shell.NO_PROGRESS)
+        watched = {task["id"]: task["status"] for task in tasks if task["id"] in finished}
+        finished.clear()
+        if watched:
+            done = sum(status in ("completed", "existing") for status in watched.values())
+            failed = sum(status == "failed" for status in watched.values())
+            notices = _NOTICES[shell.language(service.language())]
+            if failed:
+                title, message = notices["failed"]
+            elif done:
+                title, message = notices["done"]
+            else:
+                continue
+            feedback.notify(title, message.format(count=done, done=done, failed=failed))
+
+
 def _fatal(message):
     if os.name == "nt":
         import ctypes
@@ -452,6 +506,7 @@ def main() -> int:
             setattr(sys, stream, open(os.devnull, "w", encoding="utf-8"))
     service = None
     server = None
+    stop = threading.Event()
     try:
         service = DesktopService(default_output=PROJECT_ROOT / "downloads", queue_scope="desktop")
         api = DesktopApi(service)
@@ -469,6 +524,14 @@ def main() -> int:
             window.events.before_show += partial(_guard_navigation, window, server.url)
             window.events.before_show += partial(_apply_titlebar, window, dark)
             window.events.before_show += partial(frame.use_custom_frame, window)
+            feedback = shell.Feedback(window, APP_NAME)
+            window.events.shown += lambda: threading.Thread(target=_watch, args=(service, feedback, stop), name="unidown-feedback", daemon=True).start()
+
+        def loaded():
+            from webview.dom import DOMEventHandler
+            window.dom.document.events.drop += DOMEventHandler(api._drop, prevent_default=True)
+
+        window.events.loaded += loaded
 
         def closing():
             with api._tools_lock:
@@ -485,12 +548,15 @@ def main() -> int:
         window.events.closing += closing
         storage = preferences_path().parent / "webview2"
         storage.mkdir(parents=True, exist_ok=True)
-        webview.start(gui="edgechromium" if os.name == "nt" else None, debug=False, private_mode=True, storage_path=str(storage))
+        icon = PROJECT_ROOT / "assets" / "media-toolkit.ico"  # a packaged app uses its executable's icon
+        webview.start(gui="edgechromium" if os.name == "nt" else None, debug=False, private_mode=True, storage_path=str(storage),
+                      icon=str(icon) if icon.is_file() else None)
         return 0
     except Exception:
         _fatal("The desktop window could not start. On Windows, install Microsoft Edge WebView2 Runtime from https://developer.microsoft.com/microsoft-edge/webview2/ and run scripts/update.cmd. See the README for terminal commands.")
         return 1
     finally:
+        stop.set()
         if service is not None:
             service.shutdown()
         if server is not None:

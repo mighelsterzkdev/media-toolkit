@@ -1,7 +1,7 @@
 @echo off
 setlocal
 chcp 65001 >nul
-set "bundle=%~dp0dist\media-toolkit-0.11.5-windows-x64"
+set "bundle=%~dp0dist\media-toolkit-0.12.0-windows-x64"
 if "%~1"=="" goto desktop
 if exist "%bundle%\unidown.exe" goto portable_cli
 if not exist "%~dp0.venv\Scripts\python.exe" (

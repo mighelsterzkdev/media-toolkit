@@ -102,6 +102,9 @@ def _read_information(downloader, url: str, *, image_only=False) -> tuple[dict, 
             # HTML pages ending in .mp4 for video. Check the actual response.
             if str((information or {}).get("extractor_key", "")).lower() in ("generic", "html5mediaembed"):
                 assets = discover(downloader, url, image_only=image_only)
+            elif (information or {}).get("extractor_key") == "Twitter" and information.get("_type") == "playlist":
+                # A post with several photos or videos offers each one as a choice.
+                assets = [(entry, None) for entry in information.get("entries") or () if entry][:20] or None
     if assets:
         information, data = assets[0]
         if len(assets) > 1:
