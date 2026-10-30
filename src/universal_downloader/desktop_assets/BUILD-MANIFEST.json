@@ -13,7 +13,7 @@
     "scripts/copy-assets.mjs": "ace048639ca198aae5c14da92bb378b19b3b1747e23a16daf2ece8465700e452",
     "src/App.tsx": "c101aecef2b18bb4a623b395af930d6e13382b2cc408af018a6c9001e6b99768",
     "src/components/BatchDialog.tsx": "c05bffe67097865666648752be46bcf33543596d122eb538ccf5669f11eba4ec",
-    "src/components/ConvertPanel.tsx": "e7f58fe5c263cabbb12f9056b6c3487004f213185b2d2ffe08974cfe73f1c10f",
+    "src/components/ConvertPanel.tsx": "674d3089e680337ca15092c55f57295ea486c64251e9d0c2415aed14825d29e1",
     "src/components/FormatPicker.tsx": "99e08bade3db306e6743060cb24a09e9d027612f56b79f4fb5602eac69e9d357",
     "src/components/LanguageToggle.tsx": "48ff40cb5f6b65515cf417df60358e71ffe8d6159b51d80f5f1dac39aece03b3",
     "src/components/SaveDestination.tsx": "a1248322aa1da6b30cae8ce554a8659ec931de17c0b7bacc92300cacd9c79206",
@@ -36,7 +36,7 @@
     "src/lib/utils.ts": "00708463d307471ed1a3ac36642e9c00a766730d7be61e2351f283a580017ea6",
     "src/locales/pt.ts": "46b84f644cd94ac8759bf550927aea270e9c66053df2ab54fe23c579a5b797f9",
     "src/main.tsx": "10ac689b4eb57228d6be39425516819110d59de99ccaff9eba6ab68ae07abcc3",
-    "src/styles.css": "43ef2d99a8d5702788376e0f13c7566d641bdbc43aeb95155cf7f2b2b4848dc4",
+    "src/styles.css": "caeba6757db4ccca0325430eb88e3a0318c26d55e7160ce9a08c1e7a09827b46",
     "src/test/App.test.tsx": "b50e9d7701fed206ada874ebf562553554634736c05a57b9caaab6ad3db159a0",
     "src/test/ConvertPanel.test.tsx": "77897916bae607664350977dadf16eda13487b97e0011583fa22dd84aa9b0000",
     "src/test/TaskList.test.tsx": "5c36effca879d13ad92dc0755d1c79f5ec69b33d1005a444584fa3caa1986914",
@@ -50,8 +50,8 @@
   },
   "outputs": {
     "THIRD-PARTY-NOTICES.txt": "88089f8dee14928daf24c40e60c6a4d847c9fbf9d776b2bd780ed7f17a724e43",
-    "assets/index-BKH28CK-.css": "26642842045f5f79b35fd76e93820f8b4272f24151872243102f480f67c58663",
-    "assets/index-Cvfif8Ca.js": "c5b9f545c78b79a99e55e583cd7a6fc4a672e84c31e91c7c33bd0f3e7152a155",
-    "index.html": "feaab3af785e1f5dfb3b609473d69339fb09d4fc5f1ce7726fbb3a9d4767ec6a"
+    "assets/index-DMIMcGjH.css": "be61869512417a358a7b66c6ad5e9e561ed06803408636745a4ffd2ab2c4be4f",
+    "assets/index-mWbnKzwm.js": "6696abd1b701d232b3a516a9e40c552de5f83351db2aa59e6ed1d0359b953142",
+    "index.html": "9d81228097de593be56928c6d0c5e0668803f53efe7170cfbc80cedf2fa8b985"
   }
 }

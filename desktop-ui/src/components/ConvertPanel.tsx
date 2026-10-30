@@ -129,7 +129,7 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
       <Button variant="outline" onClick={onAdd} disabled={busy}><Plus className="size-4" />{t('Add files')}</Button>
     </div>
     {conversion.files.length === 0 ? <div className="conversion-empty">
-      <Files className="size-6" aria-hidden="true" />
+      <Files className="size-5" aria-hidden="true" />
       <div><p>{t('Add files or drop them here')}</p><span>{t('Images, audio, video and animations. Original files are kept.')}</span></div>
     </div> : <>
       <div className="conversion-selection">
