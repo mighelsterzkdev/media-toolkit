@@ -49,7 +49,25 @@
   .app-header h1 { @apply text-xl font-semibold tracking-tight; }
   .app-header-main { @apply flex min-w-0 flex-wrap items-center gap-x-6 gap-y-3; }
   .app-header-actions { @apply flex shrink-0 items-center gap-1; }
-  .tool-panel { @apply min-w-0 shrink-0; }
+  .app-header { position: relative; user-select: none; }
+  .app-header.with-window-controls { padding-right: 150px; }
+  .window-controls { @apply absolute right-0 top-0 flex; }
+  .window-controls button { @apply grid h-8 w-[46px] place-items-center border-0 bg-transparent text-foreground; font: 10px 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; transition: background-color .1s; }
+  .window-controls button:hover { background: hsl(var(--foreground) / .08); }
+  .window-controls button:active { background: hsl(var(--foreground) / .05); }
+  .window-controls .window-close:hover { background: #c42b1c; color: #fff; }
+  .window-controls .window-close:active { background: #c84031; color: #fff; }
+  .window-controls button:focus-visible { @apply outline-none ring-2 ring-inset ring-ring; }
+  /* Native edge resizing: the web view covers the whole window, so thin strips start it. */
+  .resize-edges { display: contents; }
+  .resize-edges > span { @apply fixed z-50; }
+  .resize-edges > .top, .resize-edges > .bottom { @apply inset-x-2 h-1; cursor: ns-resize; }
+  .resize-edges > .left, .resize-edges > .right { @apply inset-y-2 w-1; cursor: ew-resize; }
+  .resize-edges > .top { @apply top-0; } .resize-edges > .bottom { @apply bottom-0; }
+  .resize-edges > .left { @apply left-0; } .resize-edges > .right { @apply right-0; }
+  .resize-edges > [class*='-'] { @apply size-2; }
+  .resize-edges > .top-left { @apply left-0 top-0; cursor: nwse-resize; } .resize-edges > .bottom-right { @apply bottom-0 right-0; cursor: nwse-resize; }
+  .resize-edges > .top-right { @apply right-0 top-0; cursor: nesw-resize; } .resize-edges > .bottom-left { @apply bottom-0 left-0; cursor: nesw-resize; }  .tool-panel { @apply min-w-0 shrink-0; }
   .app-notices { @apply max-h-[30%] shrink-0 overflow-y-auto px-6 pt-4; }
   .app-content { @apply flex min-h-0 flex-1 flex-col overflow-y-auto; }
   .notice { @apply mb-4 flex items-center gap-4 rounded-md border bg-muted/30 p-4 text-sm leading-6 text-foreground; }

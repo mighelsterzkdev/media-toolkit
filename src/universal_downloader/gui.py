@@ -16,7 +16,7 @@ import sys
 import threading
 from urllib.parse import unquote, urlsplit
 
-from . import APP_NAME, __version__
+from . import APP_NAME, __version__, frame
 from .dependencies import PROJECT_ROOT, find_ffmpeg, find_js_runtime
 from .errors import DownloadError
 from .preferences import preferences_path
@@ -131,6 +131,17 @@ class DesktopApi:
 
     def save_settings(self, settings):
         return self._call(self._service.save_settings, settings)
+
+    def window_action(self, action):
+        try:
+            if self._window is None:
+                raise DownloadError("The window is not ready yet.")
+            frame.window_action(self._window, action)
+            return {"ok": True}
+        except (DownloadError, ValueError) as error:
+            return {"ok": False, "error": str(error)}
+        except Exception:
+            return {"ok": False, "error": "The window could not respond."}
 
     def set_theme(self, theme):
         response = self._call(self._service.set_theme, theme)
@@ -451,12 +462,13 @@ def main() -> int:
         dark = _uses_dark_titlebar(service.theme())
         window = webview.create_window(
             APP_NAME, server.url, js_api=api, width=1000, height=760,
-            min_size=(760, 600), background_color="#0a0a0a" if dark else "#ffffff", text_select=True,
+            min_size=(760, 600), background_color="#0a0a0a" if dark else "#ffffff", text_select=True, frameless=os.name == "nt", easy_drag=False,
         )
         api._window, api._webview = window, webview
         if os.name == "nt":
             window.events.before_show += partial(_guard_navigation, window, server.url)
             window.events.before_show += partial(_apply_titlebar, window, dark)
+            window.events.before_show += partial(frame.use_custom_frame, window)
 
         def closing():
             with api._tools_lock:

@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { BatchDialog } from './components/BatchDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { ThemeToggle, useThemeClass } from './components/ThemeToggle'
+import { WindowControls, dragFromHeader, maximizeFromHeader } from './components/TitleBar'
 import { TaskList } from './components/TaskList'
 import { ConvertPanel } from './components/ConvertPanel'
 import { SaveDestination } from './components/SaveDestination'
@@ -88,7 +89,7 @@ export default function App() {
   }
 
   return <Tabs value={tab} onValueChange={setTab} className="app-shell">
-    <header className="app-header">
+    <header className={connected ? 'app-header with-window-controls' : 'app-header'} onMouseDown={dragFromHeader} onDoubleClick={maximizeFromHeader}>{connected ? <WindowControls /> : null}
       <div className="app-header-main"><h1>Media Toolkit</h1>
         <TabsList aria-label="Media tools"><TabsTrigger value="download"><ArrowDownToLine className="size-4" />Download</TabsTrigger><TabsTrigger value="convert"><ArrowRightLeft className="size-4" />Convert</TabsTrigger></TabsList>
       </div>

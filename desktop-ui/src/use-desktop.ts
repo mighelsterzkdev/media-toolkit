@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { initialState, type DesktopApi, type DesktopState } from './types'
 
-type Method = keyof DesktopApi
+// Window actions are fire-and-forget and never return desktop state.
+type Method = Exclude<keyof DesktopApi, 'window_action'>
 
 export function useDesktop() {
   const [state, setState] = useState<DesktopState>(initialState)

@@ -52,7 +52,10 @@ export interface DesktopApi {
   enqueue_conversions(ids: string[], target: ConversionFormat, background: '#FFFFFF' | '#000000'): Promise<ApiResult>;
   prepare_conversion(taskId: string): Promise<ApiResult>;
   set_theme(theme: Theme): Promise<ApiResult>;
+  window_action?(action: WindowAction): Promise<{ ok: true } | { ok: false; error: string }>;
 }
+export type ResizeEdge = 'top' | 'bottom' | 'left' | 'right' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+export type WindowAction = 'drag' | `resize-${ResizeEdge}` | 'minimize' | 'maximize' | 'close'
 declare global { interface Window { pywebview?: { api: DesktopApi } } }
 export const initialState: DesktopState = {
   version: '', settings: { output: '', max_height: null, max_size: null },
