@@ -158,8 +158,24 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual((self.install / EXECUTABLE).read_bytes(), b"old")
         with patch.object(updates, "_launch") as launch:
             updater.install()
+            updater.install_on_exit()
         launch.assert_called_once()
         self.assertEqual(launch.call_args.args[:2], (staged / EXECUTABLE, updates.FINISH_FLAG))
+        self.assertNotIn(updates.NO_REOPEN, launch.call_args.args)
+        self.assertEqual(updater.snapshot()["status"], "installing")
+
+    def test_downloaded_update_installs_when_the_app_closes(self):
+        updater = self.updater(Server())
+        with patch.object(updates, "_launch") as launch:
+            updater.install_on_exit()
+            launch.assert_not_called()
+            updater.check()
+            wait(updater, "available")
+            updater.download()
+            wait(updater, "ready")
+            updater.install_on_exit()
+        launch.assert_called_once()
+        self.assertEqual(launch.call_args.args[-1], updates.NO_REOPEN)
 
     def test_mismatched_or_unsafe_archives_are_discarded(self):
         for server in (Server(digest="0" * 64), Server(files={"../escape.txt": b"x", EXECUTABLE: b"new"}), Server(files={"_internal/a": b"x"})):
@@ -205,6 +221,11 @@ class FinishTests(unittest.TestCase):
         self.assertEqual((self.target / "downloads/video.mp4").read_bytes(), b"mine")
         self.assertEqual(self.launched, [self.target / EXECUTABLE])
 
+    def test_closing_install_does_not_reopen(self):
+        self.assertEqual(updates.finish(["0", updates.NO_REOPEN], EXECUTABLE, staged=self.staged, launch=self.launched.append), 0)
+        self.assertEqual((self.target / EXECUTABLE).read_bytes(), b"new")
+        self.assertEqual(self.launched, [])
+
     def test_failure_restores_the_previous_version(self):
         copy = updates.shutil.copy2
 
@@ -213,7 +234,7 @@ class FinishTests(unittest.TestCase):
             if Path(source).name == EXECUTABLE:
                 raise OSError("disk full")
             return copy(source, destination, **kwargs)
-        with patch.object(updates.shutil, "copy2", broken), patch.object(updates, "_retry", lambda action, attempts=20: action()):
+        with patch.object(updates.shutil, "copy2", broken), patch.object(updates, "_retry", lambda action, attempts=60: action()):
             self.assertEqual(updates.finish(["0"], EXECUTABLE, staged=self.staged, launch=self.launched.append), 1)
         self.assertEqual((self.target / EXECUTABLE).read_bytes(), b"old")
         self.assertEqual(sorted(path.name for path in (self.target / "_internal").iterdir()), ["old.dll"])

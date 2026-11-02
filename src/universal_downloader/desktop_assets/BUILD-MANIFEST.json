@@ -5,7 +5,7 @@
     "build-inputs.json": "4bc54e00d6d32097229120c89f19806878fb712811f9afcbb0d7b91aedfa006a",
     "index.html": "5c608429cbddb172fc25dc3ca65a00501c889cde2d93ad7c9830753aa4f9b511",
     "licenses/react-remove-scroll-bar.txt": "fb5c42efb0f851322eefc4c44682bb38d57f364934dbb7bf3eacf39f6a412fff",
-    "package.json": "22dc9ce2435b3facae66dde9d47eb99860fb726a673c96aa91e03df6cd1ed3bd",
+    "package.json": "7865936b9258d41cfa1bbd6cc5b38eaaa4bd6b7b975c0e4ade6a50b9a36e9017",
     "pnpm-lock.yaml": "265c2bfe3f07cc83af3e9995bda15c4839b5c600df1671cf60a4e120c728e774",
     "pnpm-workspace.yaml": "ac02d96368617c760f093cfe61fdec64b6244007ab3553e0d6621f706f54a353",
     "postcss.config.js": "45027a2befa94d6f46875c529d1088c12548d8f0bee31133e4ebb00ebc581e33",
@@ -21,7 +21,7 @@
     "src/components/TaskList.tsx": "a26a40b2025d5be16a71bd1780029b9a38d18a070020261165cddb7f4908da1e",
     "src/components/ThemeToggle.tsx": "f7d5714425f1dedd19f09538bc97164af207b5a4bd83bbecbd7f031d4b0efc67",
     "src/components/TitleBar.tsx": "0df600b969f537b0bd3afc1d32de38d9190caf4f1aa56ed787203c5a1dbf4adb",
-    "src/components/UpdateNotice.tsx": "fd0ddf541e6740e94c4a03f79d9dcac812a80e963411e095a8d97f00402eacbb",
+    "src/components/UpdateNotice.tsx": "a96f80729836f4d949c401d58debfb340e77b35b08d8bfba3ece3119b489a66c",
     "src/components/ui/button.tsx": "c08d991d24748edf8748c7fe667b8649306d82e62ba699a4c8780deef511a364",
     "src/components/ui/dialog.tsx": "71ba16adcdf9b29c754c87eaf9dd394afe46ca8651219059cf634167821a4a06",
     "src/components/ui/input.tsx": "92c68f6a29a1c9d516d9223d0445a489cce4b461d285f64a85c342101b1c0008",
@@ -35,7 +35,7 @@
     "src/formats.ts": "d55d8c5560b7407ce34f3e71cc685431470093fcc28150eea307024116de959a",
     "src/i18n.ts": "ce4c16edab2bca28b5d0c79e3fffe10d08f347f42d71d7009ea6b61ab1b60b63",
     "src/lib/utils.ts": "00708463d307471ed1a3ac36642e9c00a766730d7be61e2351f283a580017ea6",
-    "src/locales/pt.ts": "30f42f1e9708510b1ec9743453a3db1b1dc8d62c560e555e8ff2fd7e2151c446",
+    "src/locales/pt.ts": "788a2961d96bf3e5dd815b5d82874be4cbcb3d66199876f4d9acd1f5d63bab85",
     "src/main.tsx": "10ac689b4eb57228d6be39425516819110d59de99ccaff9eba6ab68ae07abcc3",
     "src/styles.css": "9515bef4e61e668bcab8ef885f99d84b28f5245b6af752ec388dbf84f0c168b3",
     "src/test/App.test.tsx": "622de285ed1785e960c7ef0e5076715af88ce432b2c56c6ad790de679eca0992",
@@ -51,8 +51,8 @@
   },
   "outputs": {
     "THIRD-PARTY-NOTICES.txt": "88089f8dee14928daf24c40e60c6a4d847c9fbf9d776b2bd780ed7f17a724e43",
-    "assets/index-C63Pf1vu.js": "1a13215bc5c537a0bbe32c9fd2a8da0d5fdc3156081a4a0b5aa06f79d871360a",
     "assets/index-C6w8mDS8.css": "0e61202428cbc25c5aa050a1541eec5f209026ffff67b655b22988b22d401b01",
-    "index.html": "aad4ce998041996ead79eaf151d70eb53146952f0eb287559b38980c1ddae7c7"
+    "assets/index-Y1ZPKZ5Y.js": "941f965400cebc5068990ba27548b34216c7cd89f83324abe7bc6e625ec24c28",
+    "index.html": "caf1a2e504d8e5bca4e790a84334158c4faf70b1d34272fc1492a070a1d4f87a"
   }
 }

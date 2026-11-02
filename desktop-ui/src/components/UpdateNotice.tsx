@@ -25,7 +25,7 @@ export function UpdateNotice({ update, name, busy, pending, onDownload, onInstal
   }
   if (update.status === 'ready') {
     return <div className="notice update-notice" role="status"><Sparkles className="size-4 shrink-0 text-success" aria-hidden="true" />
-      <span>{busy ? t('Finish the current work to install {name} {version}.', values) : t('{name} {version} is ready to install.', values)}</span>
+      <span>{busy ? t('Finish the current work to install {name} {version}.', values) : t('{name} {version} installs when you close the app.', values)}</span>
       <Button size="sm" disabled={busy || pending} onClick={onInstall}>{pending ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}{t('Restart to update')}</Button></div>
   }
   if (update.status === 'failed') {

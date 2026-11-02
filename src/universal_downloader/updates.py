@@ -28,6 +28,7 @@ MAX_ARCHIVE = 700 * 1024 * 1024
 MAX_METADATA = 1024 * 1024
 STAGING = ".update"
 FINISH_FLAG = "--finish-update"
+NO_REOPEN = "--no-reopen"
 _HOSTS = frozenset(("api.github.com", "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"))
 _VERSION = re.compile(r"v?(\d{1,4})\.(\d{1,4})\.(\d{1,4})")
 
@@ -228,13 +229,25 @@ class Updater:
                 else "The update could not be downloaded. Try again.")
             self._set(status="failed", progress=None, error=message)
 
-    def install(self) -> None:
+    def install(self, *, reopen: bool = True) -> None:
         """Start the staged program; it installs once this process has exited."""
         with self._lock:
             if self._state["status"] != "ready" or self._release is None:
                 raise UpdateError("The update is not ready yet.")
             bundle = self._install_dir / STAGING / self._release["archive"].removesuffix(".zip")
-        _launch(bundle / self.executable, FINISH_FLAG, str(os.getpid()))
+            self._state["status"] = "installing"
+        try:
+            _launch(bundle / self.executable, FINISH_FLAG, str(os.getpid()), *(() if reopen else (NO_REOPEN,)))
+        except OSError:
+            self._set(status="ready")
+            raise UpdateError("The update could not be started. Try again.") from None
+
+    def install_on_exit(self) -> None:
+        """A downloaded update is installed when the app closes, so it is never offered again."""
+        try:
+            self.install(reopen=False)
+        except UpdateError:
+            pass
 
     def remove_leftovers(self, delay: float = 5.0) -> None:
         """Remove the staging folder of an earlier update once its helper has exited."""
@@ -244,7 +257,7 @@ class Updater:
         def remove():
             time.sleep(delay)
             with self._lock:
-                busy = self._state["status"] in ("downloading", "ready")
+                busy = self._state["status"] in ("downloading", "ready", "installing")
             if not busy:
                 shutil.rmtree(self._install_dir / STAGING, ignore_errors=True)
 
@@ -277,14 +290,15 @@ def _wait_for_exit(pid: int | None, timeout: float) -> None:
             kernel32.CloseHandle(handle)
 
 
-def _retry(action, attempts: int = 20):
+def _retry(action, attempts: int = 60):
+    # Antivirus scans and closing WebView2 processes can hold files for several seconds.
     for attempt in range(attempts):
         try:
             return action()
         except OSError:
             if attempt == attempts - 1:
                 raise
-            time.sleep(0.25)
+            time.sleep(0.5)
 
 
 def _remove(path: Path) -> None:
@@ -295,7 +309,7 @@ def _remove(path: Path) -> None:
 
 
 def finish(arguments: list[str], executable: str, staged: Path | None = None, launch=_launch) -> int:
-    """Run by the staged program: replace the installed entries, then reopen the app.
+    """Run by the staged program: replace the installed entries, then reopen the app unless told not to.
 
     The installation folder is derived from where this program was staged, so
     the command line never chooses which folder is changed.
@@ -305,6 +319,7 @@ def finish(arguments: list[str], executable: str, staged: Path | None = None, la
     if staged.parent.name != STAGING or not (target / executable).is_file() or not (staged / executable).is_file():
         return 2
     pid = int(arguments[0]) if arguments and arguments[0].isdigit() else None
+    reopen = NO_REOPEN not in arguments[1:]
     _wait_for_exit(pid, 60)
     backup = staged.parent / "previous"
     shutil.rmtree(backup, ignore_errors=True)
@@ -332,7 +347,9 @@ def finish(arguments: list[str], executable: str, staged: Path | None = None, la
                 _retry(lambda: (backup / name).rename(target / name))
             except OSError:
                 pass
-        launch(target / executable)
+        if reopen:
+            launch(target / executable)
         return 1
-    launch(target / executable)
+    if reopen:
+        launch(target / executable)
     return 0

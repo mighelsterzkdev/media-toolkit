@@ -221,7 +221,7 @@ export const pt: Record<string, string> = {
   'This output format is not available for the checked media. Choose another compatible format.': 'Este formato não está disponível para esta mídia. Escolha outro formato compatível.',
   '{name} {version} is available.': '{name} {version} está disponível.',
   'Downloading {name} {version}…': 'Baixando {name} {version}…',
-  '{name} {version} is ready to install.': '{name} {version} está pronto para instalar.',
+  '{name} {version} installs when you close the app.': '{name} {version} será instalado quando você fechar o app.',
   'Finish the current work to install {name} {version}.': 'Termine o trabalho atual para instalar {name} {version}.',
   'Restart to update': 'Reiniciar e atualizar',
   'Release page': 'Página da versão',

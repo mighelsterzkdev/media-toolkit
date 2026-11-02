@@ -593,6 +593,7 @@ def main() -> int:
         icon = PROJECT_ROOT / "assets" / "media-toolkit.ico"  # a packaged app uses its executable's icon
         webview.start(gui="edgechromium" if os.name == "nt" else None, debug=False, private_mode=True, storage_path=str(storage),
                       icon=str(icon) if icon.is_file() else None)
+        updater.install_on_exit()
         return 0
     except Exception:
         _fatal("The desktop window could not start. On Windows, install Microsoft Edge WebView2 Runtime from https://developer.microsoft.com/microsoft-edge/webview2/ and run scripts/update.cmd. See the README for terminal commands.")
