@@ -222,6 +222,8 @@ export const pt: Record<string, string> = {
   '{name} {version} is available.': '{name} {version} está disponível.',
   'Downloading {name} {version}…': 'Baixando {name} {version}…',
   '{name} {version} installs when you close the app.': '{name} {version} será instalado quando você fechar o app.',
+  'It downloads in the background and installs when you close the app.': 'Ele baixa em segundo plano e é instalado quando você fechar o app.',
+  'Or restart now to use it right away.': 'Ou reinicie agora para usar na hora.',
   'Finish the current work to install {name} {version}.': 'Termine o trabalho atual para instalar {name} {version}.',
   'Restart to update': 'Reiniciar e atualizar',
   'Release page': 'Página da versão',

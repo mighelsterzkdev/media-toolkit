@@ -7,6 +7,11 @@ A desktop app with two tools: **Download** saves media from a URL in its origina
 
 ![Media Toolkit desktop interface](docs/media-toolkit.jpg)
 
+## Version 0.13.3
+
+- The update notice is a card with a short explanation and, while downloading, a progress bar.
+- A failed or cancelled task shows a labeled **Try again** button.
+
 ## Version 0.13.2
 
 - A downloaded update now installs when you close the app. Before, closing the app before **Restart to update** threw the download away, so the same update was offered again at every start.
