@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 from .desktop_download_formats import DOWNLOAD_TARGETS_BY_KIND
 from .errors import DownloadError
+from .conversion_options import options_for
 from .preferences import preferences_path
 from .urls import validate_url
 
@@ -162,7 +163,7 @@ def task_record(task):
     result = {field: task.get(field) for field in ("id", "url", "title", "action", "source_format", "kind", "format", "status", "path", "error", "can_convert")}
     result["settings"] = task["_settings"]
     if task["action"] == "convert":
-        result.update(image=task["_image"], background=task["_background"])
+        result.update(image=task["_image"], background=task["_background"], conversion_options=task.get("_conversion_options"))
     else:
         result["selection"] = task.get("_selection")
         result["policy"] = task["_identity"][1]
@@ -173,7 +174,7 @@ def task_record(task):
 
 
 def _validate_record(value):
-    if not isinstance(value, dict) or set(value) - {"id", "url", "title", "action", "source_format", "kind", "format", "status", "path", "error", "can_convert", "settings", "image", "background", "selection", "policy", "selection_key"}:
+    if not isinstance(value, dict) or set(value) - {"id", "url", "title", "action", "source_format", "kind", "format", "status", "path", "error", "can_convert", "settings", "image", "background", "selection", "policy", "selection_key", "conversion_options"}:
         raise ValueError("invalid saved task")
     identifier = value.get("id")
     if not isinstance(identifier, str) or re.fullmatch(r"[a-f0-9]{32}", identifier) is None:
@@ -213,7 +214,7 @@ def _validate_record(value):
         image = _image(value.get("image"))
         if kind != image["media_type"] or target not in image["targets"] or value.get("background") not in ("#FFFFFF", "#000000"):
             raise ValueError("invalid saved conversion")
-        result.update(url="", image=image, background=value["background"])
+        result.update(url="", image=image, background=value["background"], conversion_options=options_for(image, target, value.get("conversion_options")))
     return result
 
 
@@ -224,11 +225,12 @@ def restore_task(record):
     image, background, selection = value.pop("image", None), value.pop("background", None), value.pop("selection", None)
     policy = value.pop("policy", None)
     selection_key = value.pop("selection_key", None)
+    conversion_options = value.pop("conversion_options", None)
     if value["status"] not in _TERMINAL:
         value.update(status="cancelled", error=RESTORED_MESSAGE, path=None, can_convert=False)
     if value["action"] == "convert":
         identity = ("convert", image["source"], image["signature"], value["format"],
-                    conversion_background(image, value["format"], background), settings["output"])
+                    conversion_background(image, value["format"], background), settings["output"], conversion_options)
     else:
         identity = (value["url"], policy, value["format"], settings["output"], settings["max_height"], settings["max_size"])
         if selection_key is not None:
@@ -237,7 +239,7 @@ def restore_task(record):
                  downloaded_bytes=0, total_bytes=None, speed=None, eta=None, operation=None,
                  _identity=identity, _settings=settings, _inspected=None, _selection=selection, _attempt=None)
     if image is not None:
-        value.update(_image=image, _background=background)
+        value.update(_image=image, _background=background, _conversion_options=conversion_options)
     return value
 
 

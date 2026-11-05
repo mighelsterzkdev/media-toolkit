@@ -135,7 +135,7 @@ class DesktopBridgeTests(unittest.TestCase):
     def test_local_conversion_and_retry_do_not_require_download_tools(self):
         self.api._tools["status"] = "missing"
         self.assertTrue(self.api.enqueue_conversions(["file-id"], "jpg", "#000000")["ok"])
-        self.service.enqueue_conversions.assert_called_once_with(["file-id"], "jpg", "#000000")
+        self.service.enqueue_conversions.assert_called_once_with(["file-id"], "jpg", "#000000", None)
         self.service.get_state.return_value["tasks"] = [{"id": "conversion", "action": "convert"}]
         self.assertTrue(self.api.retry_task("conversion")["ok"])
         self.service.retry_task.assert_called_once_with("conversion")

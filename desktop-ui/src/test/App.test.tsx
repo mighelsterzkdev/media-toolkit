@@ -21,7 +21,7 @@ function fixture() {
       ] }] }
       return success()
     }),
-    cancel_check: vi.fn(success), enqueue: vi.fn(success), enqueue_links: vi.fn(success), cancel_task: vi.fn(success), retry_task: vi.fn(success), remove_finished: vi.fn(success),
+    cancel_check: vi.fn(success), enqueue: vi.fn(success), enqueue_links: vi.fn(success), cancel_task: vi.fn(success), retry_task: vi.fn(success), retry_failed: vi.fn(success), remove_task: vi.fn(success), remove_finished: vi.fn(success),
     save_settings: vi.fn(async settings => { state.settings = settings; return success() }), browse_folder: vi.fn(success), open_folder: vi.fn(success), clear_resume: vi.fn(success), install_tools: vi.fn(success),
     select_conversion_files: vi.fn(success), remove_conversion_file: vi.fn(success), clear_conversion_files: vi.fn(success), enqueue_conversions: vi.fn(success), prepare_conversion: vi.fn(success),
     set_theme: vi.fn(async theme => { state.theme = theme; return success() }),

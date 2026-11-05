@@ -82,7 +82,7 @@ def _worker_main(connection):
 
             conversion_progress({"status": "preparing"})
             path = convert_local_file(payload["image"], payload["format"], Path(payload["settings"]["output"]),
-                                       background=payload["background"], work_dir=Path(payload["work_dir"]), progress_hook=conversion_progress)
+                                       background=payload["background"], work_dir=Path(payload["work_dir"]), progress_hook=conversion_progress, options=payload.get("options"))
             connection.send(("result", {"title": payload["image"]["name"], "path": str(path), "already_exists": False, "can_convert": True}))
             return
         if payload["action"] != "download":

@@ -2,18 +2,19 @@ import { useState } from 'react'
 import { ArrowRightLeft, CircleAlert, FileImage, FileVideo, Files, Images, LoaderCircle, Music2, Plus, X } from 'lucide-react'
 import { Button } from './ui/button'
 import { Label } from './ui/label'
+import { Input } from './ui/input'
 import { RadioGroup, RadioGroupItem } from './ui/radio-group'
 import { FormatPicker } from './FormatPicker'
 import { SaveDestination } from './SaveDestination'
 import { bytes } from '../format'
 import { formatHint } from '../formats'
 import { t } from '../i18n'
-import type { Conversion, ConversionFormat, LocalFile } from '../types'
+import type { Conversion, ConversionFormat, ConversionOptions, LocalFile } from '../types'
 
 interface Props {
   conversion: Conversion; output: string; disabled: boolean; ffmpegReady?: boolean;
   onAdd(): void; onRemove(id: string): void; onClear(): void; onBrowse(): void;
-  onConvert(ids: string[], target: ConversionFormat, background: '#FFFFFF' | '#000000'): Promise<unknown>
+  onConvert(ids: string[], target: ConversionFormat, background: '#FFFFFF' | '#000000', options?: ConversionOptions): Promise<unknown>
 }
 
 const outputGroups = [
@@ -41,6 +42,15 @@ function targetLabel(target: string, files: LocalFile[]) {
 }
 function preservesMedia(file: LocalFile, target: string) { return (preferredFormats[mediaType(file)] as readonly string[]).includes(target) }
 function targetNeedsTools(file: LocalFile, target: string) { return Boolean(file.requires_tools || ['audio', 'video'].includes(mediaType(file)) || ffmpegFormats.has(target)) }
+function supportsLossyOptions(file: LocalFile, target: string) {
+  return mediaType(file) === 'image' ? ['jpg', 'webp', 'avif'].includes(target)
+    : ['audio', 'video'].includes(mediaType(file)) && ['mp3', 'm4a', 'aac', 'opus', 'ogg', 'mp4', 'mkv', 'mov', 'webm'].includes(target)
+}
+function hasApplicableOptions(file: LocalFile, target: string, choices: ConversionOptions) {
+  return mediaType(file) === 'image' && choices.max_width != null
+    || mediaType(file) === 'video' && ['mp4', 'mkv', 'mov', 'webm'].includes(target) && choices.max_height != null
+    || supportsLossyOptions(file, target) && (choices.quality !== 'preserve' || choices.max_size != null)
+}
 function defaultTarget(files: LocalFile[], targets: string[], ffmpegReady: boolean) {
   // Defaults preserve a single media category. Mixed sources or extraction
   // require an explicit choice, even when another format would cover more files.
@@ -83,9 +93,22 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
   const [preference, setPreference] = useState<{ target: ConversionFormat; selection: string } | null>(null)
   const [background, setBackground] = useState<'#FFFFFF' | '#000000'>('#FFFFFF')
   const [submitting, setSubmitting] = useState(false)
+  const [heightPreset, setHeightPreset] = useState('original')
+  const [customHeight, setCustomHeight] = useState('')
+  const [maxWidth, setMaxWidth] = useState('')
+  const [quality, setQuality] = useState<ConversionOptions['quality']>('preserve')
+  const [targetSize, setTargetSize] = useState('')
+  const maxHeight = heightPreset === 'original' ? null : Number(heightPreset === 'custom' ? customHeight : heightPreset)
+  const width = maxWidth.trim() ? Number(maxWidth) : null
+  const size = targetSize.trim() ? Math.round(Number(targetSize) * 1048576) : null
+  const transforming = quality !== 'preserve' || maxHeight != null || width != null || size != null
   const checking = conversion.status === 'checking'
   const busy = disabled || checking || submitting
-  const validFiles = conversion.files.filter(file => !file.error && file.targets.length > 0)
+  const requested: ConversionOptions = { max_height: maxHeight, max_width: width, quality, max_size: size }
+  const availableFiles = conversion.files.map(file => transforming ? { ...file,
+    targets: (file.processing_targets ?? file.targets).filter(target => file.targets.includes(target) || hasApplicableOptions(file, target, requested)),
+  } : file)
+  const validFiles = availableFiles.filter(file => !file.error && (file.targets.length > 0 || Boolean(file.processing_targets?.length)))
   const selected = validFiles.filter(file => !excluded.has(file.id))
   const selectionKey = JSON.stringify(selected.map(file => [file.id, mediaType(file), file.format]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))
   const availableTargets = new Set(selected.flatMap(file => file.targets))
@@ -103,8 +126,18 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
   const skipped = selected.length - compatible.length
   const needsTools = Boolean(target && !ffmpegReady && compatible.some(file => targetNeedsTools(file, target)))
   const flattensAlpha = Boolean(target && compatible.some(file => file.transparent
-    && (mediaType(file) === 'video' ? file.background_targets?.includes(target) : flattenFormats.has(target))))
-  const targetNotes = target ? [...new Set(compatible.map(file => file.target_notes?.[target]).filter((note): note is string => Boolean(note)))] : []
+    && (mediaType(file) === 'video' ? file.background_targets?.includes(target)
+      || ['mp4', 'mkv', 'mov', 'webm'].includes(target) && hasApplicableOptions(file, target, requested) : flattenFormats.has(target))))
+  const supportsSize = Boolean(target && compatible.length > 0 && compatible.every(file => supportsLossyOptions(file, target)))
+  const canChooseQuality = supportsSize || !target && selected.length > 0 && selected.every(file => ['image', 'audio', 'video'].includes(mediaType(file)))
+  const imageOptions = selected.some(file => mediaType(file) === 'image')
+  const videoOptions = Boolean((!target || ['mp4', 'mkv', 'mov', 'webm'].includes(target)) && selected.some(file => mediaType(file) === 'video'))
+  const dimensionError = [imageOptions ? width : null, videoOptions ? maxHeight : null].some(value => value != null && (!Number.isSafeInteger(value) || value < 2 || value > 16384))
+  const sizeError = size != null && (!Number.isSafeInteger(size) || size < 1024 || size > 1073741824)
+  const optionsError = dimensionError ? t('Conversion dimensions must be whole numbers between 2 and 16384 pixels.')
+    : sizeError ? t('The target file size must be between 1 KiB and 1 GiB.')
+      : size != null && !supportsSize ? t('Target file size is supported for JPG, WebP, AVIF, video and lossy audio outputs only.') : null
+  const targetNotes = target && !transforming ? [...new Set(compatible.map(file => file.target_notes?.[target]).filter((note): note is string => Boolean(note)))] : []
 
   function selectFile(id: string, checked: boolean) {
     setExcluded(previous => { const next = new Set(previous); if (checked) next.delete(id); else next.add(id); return next })
@@ -117,9 +150,13 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
     })
   }
   async function convert() {
-    if (busy || needsTools || !target || compatible.length === 0) return
+    if (busy || needsTools || !target || compatible.length === 0 || optionsError) return
     setSubmitting(true)
-    try { await onConvert(compatible.map(file => file.id), target, background) }
+    const choices: ConversionOptions = { max_height: videoOptions ? maxHeight : null, max_width: imageOptions ? width : null, quality: supportsSize ? quality : 'preserve', max_size: size }
+    try {
+      if (transforming) await onConvert(compatible.map(file => file.id), target, background, choices)
+      else await onConvert(compatible.map(file => file.id), target, background)
+    }
     finally { setSubmitting(false) }
   }
 
@@ -137,8 +174,8 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
         <div><Button variant="ghost" size="sm" onClick={toggleAll} disabled={busy || validFiles.length === 0}>{t(selected.length === validFiles.length ? 'Deselect all' : 'Select all')}</Button><Button variant="ghost" size="sm" onClick={onClear} disabled={disabled || submitting}>{t('Clear files')}</Button></div>
       </div>
       <ul className="conversion-files" aria-label={t('Selected files')}>
-        {conversion.files.map(file => {
-          const valid = !file.error && file.targets.length > 0
+        {availableFiles.map(file => {
+          const valid = !file.error && (file.targets.length > 0 || Boolean(file.processing_targets?.length))
           const willSkip = valid && !excluded.has(file.id) && target && !file.targets.includes(target)
           const FileIcon = mediaIcon(file)
           return <li key={file.id} className={`conversion-file ${file.error ? 'conversion-file-invalid' : ''}`}>
@@ -146,7 +183,7 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
             <FileIcon className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <div className="conversion-file-copy"><p title={file.name}>{file.name}</p>
               {file.error ? <span className="inline-error">{t(file.error)}</span> : <span>{fileDescription(file)}</span>}
-              {!checking && !file.error && file.targets.length === 0 ? <span>{t('No compatible output formats are available with the installed tools.')}</span> : null}
+              {!checking && !file.error && file.targets.length === 0 ? <span>{t(file.processing_targets?.length ? 'Choose resize or quality options to process this file in its current format.' : 'No compatible output formats are available with the installed tools.')}</span> : null}
               {willSkip ? <span className="conversion-file-skip">{t(file.format?.toLowerCase() === target ? 'Already {format} · skipped' : 'Incompatible with {format} · skipped', { format: formatName(target) })}</span> : null}
             </div>
             <Button variant="ghost" size="icon-sm" aria-label={t('Remove {name}', { name: file.name })} title={t('Remove from selection')} disabled={busy} onClick={() => onRemove(file.id)}><X className="size-4" /></Button>
@@ -171,6 +208,22 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
         : t('Choose an output format before converting this selection.')}</p>
       {targetNotes.map(note => <p key={note} className="field-help">{t(note)}</p>)}
       {needsTools ? <p className="field-help">{t('Install FFmpeg to convert this selection.')}</p> : null}
+      <div className="grid gap-4 sm:grid-cols-2">
+        {videoOptions ? <div className="space-y-2"><Label htmlFor="conversion-height">{t('Maximum video height')}</Label>
+          <select id="conversion-height" className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={heightPreset} disabled={busy} onChange={event => setHeightPreset(event.target.value)}>
+            <option value="original">{t('Original dimensions')}</option><option value="720">720p</option><option value="1080">1080p</option><option value="custom">{t('Custom')}</option>
+          </select>
+          {heightPreset === 'custom' ? <Input aria-label={t('Custom video height in pixels')} type="number" min="2" max="16384" step="1" value={customHeight} onChange={event => setCustomHeight(event.target.value)} disabled={busy} /> : null}
+        </div> : null}
+        {imageOptions ? <div className="space-y-2"><Label htmlFor="conversion-width">{t('Maximum image width (px)')}</Label><Input id="conversion-width" type="number" min="2" max="16384" step="1" placeholder={t('Original dimensions')} value={maxWidth} onChange={event => setMaxWidth(event.target.value)} disabled={busy} /></div> : null}
+        {canChooseQuality || size != null ? <><div className="space-y-2"><Label htmlFor="conversion-quality">{t('Output quality')}</Label>
+          <select id="conversion-quality" className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={quality} disabled={busy || !canChooseQuality} onChange={event => setQuality(event.target.value as ConversionOptions['quality'])}>
+            <option value="preserve">{t('Keep current conversion')}</option><option value="smaller">{t('Smaller file')}</option><option value="balanced">{t('Balanced')}</option><option value="best">{t('Best quality')}</option>
+          </select></div><div className="space-y-2"><Label htmlFor="conversion-size">{t('Target file size (MiB)')}</Label><Input id="conversion-size" type="number" min="0.001" max="1024" step="any" placeholder={t('No size target')} value={targetSize} onChange={event => setTargetSize(event.target.value)} disabled={busy} /></div></> : null}
+      </div>
+      {imageOptions || videoOptions ? <p className="field-help">{t('Keeps proportions and never enlarges the source.')}</p> : null}
+      {size != null ? <p className="field-help">{t('The size target overrides quality. A file is saved only if it fits; very small targets may be impossible.')}</p> : transforming && supportsSize ? <p className="field-help">{t('Quality presets re-encode the output. Original files are kept.')}</p> : null}
+      {optionsError ? <p className="inline-error" role="alert">{optionsError}</p> : null}
       {flattensAlpha && target ? <div className="alpha-background"><Label>{t('Background')}</Label>
         <RadioGroup value={background} onValueChange={value => setBackground(value as '#FFFFFF' | '#000000')} aria-label={t('{format} background', { format: formatName(target) })} orientation="horizontal" className="flex flex-wrap gap-6">
           <Label htmlFor="background-white" className="background-choice"><RadioGroupItem id="background-white" value="#FFFFFF" disabled={busy} />{t('White')}</Label>
@@ -180,7 +233,7 @@ export function ConvertPanel({ conversion, output, disabled, ffmpegReady = true,
     </div> : null}
     <div className="download-footer">
       <SaveDestination output={output} disabled={disabled} onBrowse={onBrowse} />
-      <Button size="lg" className="download-button" onClick={() => void convert()} disabled={busy || needsTools || !target || compatible.length === 0}>{submitting ? <LoaderCircle className="animate-spin" /> : <ArrowRightLeft />}{t('Convert')}</Button>
+      <Button size="lg" className="download-button" onClick={() => void convert()} disabled={busy || needsTools || !target || compatible.length === 0 || Boolean(optionsError)}>{submitting ? <LoaderCircle className="animate-spin" /> : <ArrowRightLeft />}{t('Convert')}</Button>
     </div>
   </section>
 }

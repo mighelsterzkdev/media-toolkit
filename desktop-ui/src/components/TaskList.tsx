@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { Check, ArrowRightLeft, List, FolderOpen, LoaderCircle, RotateCcw, X, AlertCircle, Clock3 } from 'lucide-react'
 import { Button } from './ui/button'
+import { Input } from './ui/input'
 import { Progress } from './ui/progress'
 import { bytes, duration, sourceHost } from '../format'
 import type { DownloadTask, TaskStatus } from '../types'
@@ -15,24 +17,53 @@ const labels: Record<TaskStatus, string> = {
 
 interface Props {
   tasks: DownloadTask[]; disabled: boolean; retryDisabled?: boolean;
-  onCancel(id: string): void; onRetry(id: string): void; onOpen(id: string): void; onClear(): void; onConvert(id: string): void
+  onCancel(id: string): void; onRetry(id: string): void; onRetryFailed(): void; onRemove(id: string): void; onOpen(id: string): void; onClear(): void; onConvert(id: string): void
 }
 
-export function TaskList({ tasks, disabled, retryDisabled, onCancel, onRetry, onOpen, onClear, onConvert }: Props) {
-  const activeCount = tasks.filter(task => active.has(task.status) || task.status === 'cancelling').length
-  const finishedCount = tasks.length - activeCount
+type Filter = 'all' | 'active' | 'failed' | 'completed' | 'cancelled'
+const filters: { id: Filter; label: string }[] = [
+  { id: 'all', label: 'All tasks' }, { id: 'active', label: 'In progress' },
+  { id: 'failed', label: 'Failed' }, { id: 'completed', label: 'Completed' }, { id: 'cancelled', label: 'Cancelled' },
+]
+function matchesFilter(task: DownloadTask, filter: Filter) {
+  return filter === 'all' || (filter === 'active' ? active.has(task.status) || task.status === 'cancelling'
+    : filter === 'completed' ? completed.has(task.status) : task.status === filter)
+}
+
+export function TaskList({ tasks, disabled, retryDisabled, onCancel, onRetry, onRetryFailed, onRemove, onOpen, onClear, onConvert }: Props) {
+  const [filter, setFilter] = useState<Filter>('all')
+  const [query, setQuery] = useState('')
+  const finishedCount = tasks.filter(task => completed.has(task.status)).length
+  const retryCount = tasks.filter(task => task.status === 'failed' && (!retryDisabled || task.action === 'convert')).length
+  const search = query.trim().toLocaleLowerCase()
+  const shown = tasks.filter(task => matchesFilter(task, filter) && (!search
+    || [task.title, task.url, task.format, task.source_format ?? ''].join(' ').toLocaleLowerCase().includes(search)))
   return <section className="downloads-section" aria-labelledby="downloads-heading">
     <div className="section-heading">
       <div className="flex items-center gap-2"><h2 id="downloads-heading">{t('Queue')}</h2>
         {tasks.length > 0 ? <span className="count-badge">{tasks.length}</span> : null}
       </div>
-      {finishedCount > 0 ? <Button variant="ghost" size="sm" onClick={onClear} disabled={disabled}>{t('Clear finished')}</Button> : null}
+      <div className="queue-actions">
+        {retryCount > 0 ? <Button variant="outline" size="sm" onClick={onRetryFailed} disabled={disabled}><RotateCcw />{t('Retry failed ({count})', { count: retryCount })}</Button> : null}
+        {finishedCount > 0 ? <Button variant="ghost" size="sm" onClick={onClear} disabled={disabled}>{t('Clear finished')}</Button> : null}
+      </div>
     </div>
+    {tasks.length > 0 ? <div className="queue-toolbar">
+      <div className="queue-filters" role="group" aria-label={t('Filter queue')}>
+        {filters.map(item => <Button key={item.id} type="button" size="sm" variant={filter === item.id ? 'secondary' : 'ghost'}
+          aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>{t(item.label)}</Button>)}
+      </div>
+      <Input type="search" className="queue-search" aria-label={t('Search queue')} placeholder={t('Search queue')} value={query}
+        maxLength={200} onChange={event => setQuery(event.target.value)} />
+      <span className="queue-count" role="status">{t('{shown} of {total} tasks', { shown: shown.length, total: tasks.length })}</span>
+    </div> : null}
     {tasks.length === 0 ? <div className="empty-downloads">
       <List className="size-5" aria-hidden="true" />
       <div><p>{t('No tasks yet')}</p><span>{t('Downloads and conversions will appear here.')}</span></div>
+    </div> : shown.length === 0 ? <div className="empty-downloads"><p>{t('No tasks match this filter.')}</p>
+      <Button variant="ghost" size="sm" onClick={() => { setFilter('all'); setQuery('') }}>{t('Show all tasks')}</Button>
     </div> : <ul className="task-list" aria-label={t('Task queue')}>
-      {tasks.map(task => {
+      {shown.map(task => {
         const done = completed.has(task.status)
         const failed = task.status === 'failed'
         const isActive = active.has(task.status)
@@ -70,6 +101,7 @@ export function TaskList({ tasks, disabled, retryDisabled, onCancel, onRetry, on
             {done && task.can_convert ? <Button variant="ghost" size="icon-sm" title={t('Convert file')} aria-label={t('Convert file {title}', { title: task.title })} disabled={disabled} onClick={() => onConvert(task.id)}><ArrowRightLeft /></Button> : null}
             {done && task.path ? <Button variant="ghost" size="icon-sm" title={t('Open containing folder')} aria-label={t('Open folder for {title}', { title: task.title })} disabled={disabled} onClick={() => onOpen(task.id)}><FolderOpen /></Button> : null}
             {failed || task.status === 'cancelled' ? <Button variant="outline" size="sm" className="task-retry" title={t('Retry task')} aria-label={t('Retry {title}', { title: task.title })} disabled={disabled || (retryDisabled && task.action !== 'convert')} onClick={() => onRetry(task.id)}><RotateCcw />{t('Try again')}</Button> : null}
+            {done || failed || task.status === 'cancelled' ? <Button variant="ghost" size="icon-sm" title={t('Remove from queue. Saved files are kept.')} aria-label={t('Remove {title} from queue', { title })} disabled={disabled} onClick={() => onRemove(task.id)}><X /></Button> : null}
             {isActive ? <Button variant="ghost" size="icon-sm" title={t('Cancel task')} aria-label={t('Cancel {title}', { title: task.title || t('task') })} disabled={disabled} onClick={() => onCancel(task.id)}><X /></Button> : null}
           </div>
         </li>

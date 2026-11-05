@@ -13,7 +13,8 @@ An extension alone never proves codec compatibility.
   M4A/AAC means AAC-LC. A native container can still need this conversion.
 - Compatible streams are copied; only incompatible streams or requested video
   resizes are encoded. PCM extraction preserves compatible source bit depth.
-- Same-format local no-ops are omitted. Download compatibility choices can
+- Same-format local no-ops are omitted unless explicit resizing, quality or
+  target-size processing was requested. Download compatibility choices can
   remain available because provider metadata does not prove the actual codec.
 - Audio extraction is explicit. Video-to-animation is explicit and omits audio.
   Mixed local selections require choosing a format before conversion.
@@ -51,6 +52,16 @@ An extension alone never proves codec compatibility.
   intermediate. Other video-to-animation paths remain streaming.
 
 ## Publication and verification
+
+Local conversion choices are validated and stored with each queued task,
+including restored tasks. Older queue records use the original conversion
+defaults. Image width and video height are maximums; sources are never enlarged.
+Explicit quality or size processing re-encodes affected streams rather than
+copying them. Target-size processing is offered only for supported lossy
+still-image, video and audio outputs. It is bounded to six image attempts or
+three audio/video attempts, and checks the completed file before publication.
+An impossible size produces an error and leaves no oversized result in the
+destination. Download size limits retain their existing transfer-cap meaning.
 
 Sources are inspected by content and checked again from a private snapshot.
 Source mutations invalidate the task. Work is published only after conversion

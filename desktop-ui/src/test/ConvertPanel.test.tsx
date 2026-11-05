@@ -18,6 +18,59 @@ async function choose(user: ReturnType<typeof userEvent.setup>, name: string) {
   await user.click(within(formatGroup()).getByRole('radio', { name: new RegExp(`^${name}\\b`) }))
 }
 
+describe('per-task conversion settings', () => {
+  it('enables a same-format image resize and sends an independent options snapshot', async () => {
+    const user = userEvent.setup()
+    const callbacks = props([{ ...image, processing_targets: ['png', ...image.targets] }])
+    render(<ConvertPanel {...callbacks} />)
+    expect(within(formatGroup()).queryByRole('radio', { name: 'PNG' })).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('Maximum image width (px)'), '320')
+    await choose(user, 'PNG')
+    await user.click(screen.getByRole('button', { name: 'Convert' }))
+    expect(callbacks.onConvert).toHaveBeenCalledWith(['image'], 'png', '#FFFFFF', { max_width: 320, max_height: null, quality: 'preserve', max_size: null })
+  })
+
+  it('keeps native lossless formats hidden when the selected preset has no effect on them', async () => {
+    const user = userEvent.setup()
+    render(<ConvertPanel {...props([{ ...image, processing_targets: ['png', ...image.targets] }])} />)
+    await user.selectOptions(screen.getByLabelText('Output quality'), 'smaller')
+    expect(within(formatGroup()).queryByRole('radio', { name: 'PNG' })).not.toBeInTheDocument()
+  })
+
+  it('makes resize settings reachable when the installed tools can only process the native format', async () => {
+    const user = userEvent.setup()
+    const callbacks = props([{ ...image, targets: [], processing_targets: ['png'] }])
+    render(<ConvertPanel {...callbacks} />)
+    expect(screen.getByRole('button', { name: 'Convert' })).toBeDisabled()
+    await user.type(screen.getByLabelText('Maximum image width (px)'), '320')
+    expect(checkedFormat()).toHaveTextContent('PNG')
+    expect(screen.getByRole('button', { name: 'Convert' })).toBeEnabled()
+  })
+
+  it('offers an explicit background when a transparent native video is re-encoded', async () => {
+    const user = userEvent.setup()
+    const callbacks = props([{ ...video, transparent: true, format: 'webm', targets: ['mp4'], processing_targets: ['mp4', 'webm'], background_targets: ['mp4'] }])
+    render(<ConvertPanel {...callbacks} />)
+    await user.selectOptions(screen.getByLabelText('Output quality'), 'smaller')
+    await choose(user, 'WebM compatibility')
+    const background = screen.getByRole('radiogroup', { name: 'WebM background' })
+    await user.click(within(background).getByRole('radio', { name: 'Black' }))
+    await user.click(screen.getByRole('button', { name: 'Convert' }))
+    expect(callbacks.onConvert).toHaveBeenCalledWith(['video'], 'webm', '#000000', { max_width: null, max_height: null, quality: 'smaller', max_size: null })
+  })
+
+  it('allows clearing a size target after switching to an incompatible lossless format', async () => {
+    const user = userEvent.setup()
+    render(<ConvertPanel {...props([image])} />)
+    await user.type(screen.getByLabelText('Target file size (MiB)'), '0.02')
+    await choose(user, 'TIFF')
+    expect(screen.getByRole('alert')).toHaveTextContent('Target file size is supported')
+    expect(screen.getByRole('button', { name: 'Convert' })).toBeDisabled()
+    await user.clear(screen.getByLabelText('Target file size (MiB)'))
+    expect(screen.getByRole('button', { name: 'Convert' })).toBeEnabled()
+  })
+})
+
 describe('conversion defaults and explicit choices', () => {
   it.each([
     ['video with audio', video, 'MP4'],

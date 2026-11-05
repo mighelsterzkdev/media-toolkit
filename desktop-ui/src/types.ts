@@ -8,13 +8,17 @@ export interface Inspection {
   status: 'idle' | 'checking' | 'ready' | 'failed'; id: string | null; url: string; error: string | null; assets: MediaAsset[]
 }
 export type ConversionFormat = string
+export interface ConversionOptions {
+  max_height: number | null; max_width: number | null;
+  quality: 'preserve' | 'smaller' | 'balanced' | 'best'; max_size: number | null;
+}
 export type ImageFormat = ConversionFormat
 export interface LocalFile {
   id: string; name: string; format: string | null; width: number | null; height: number | null;
   size: number | null; transparent: boolean; targets: ConversionFormat[]; error: string | null;
   media_type?: 'image' | 'audio' | 'video' | 'animation'; duration?: number | null; animated?: boolean;
   pages?: number; has_audio?: boolean; target_notes?: Record<string, string>; requires_tools?: boolean;
-  background_targets?: ConversionFormat[]
+  background_targets?: ConversionFormat[]; processing_targets?: ConversionFormat[] | null
 }
 export type LocalImage = LocalFile
 export interface Conversion {
@@ -45,6 +49,8 @@ export interface DesktopApi {
   enqueue_links(text: string): Promise<ApiResult>;
   cancel_task(id: string): Promise<ApiResult>;
   retry_task(id: string): Promise<ApiResult>;
+  retry_failed(): Promise<ApiResult>;
+  remove_task(id: string): Promise<ApiResult>;
   remove_finished(): Promise<ApiResult>;
   save_settings(settings: Settings): Promise<ApiResult>;
   browse_folder(): Promise<ApiResult>;
@@ -54,7 +60,7 @@ export interface DesktopApi {
   select_conversion_files(): Promise<ApiResult>;
   remove_conversion_file(id: string): Promise<ApiResult>;
   clear_conversion_files(): Promise<ApiResult>;
-  enqueue_conversions(ids: string[], target: ConversionFormat, background: '#FFFFFF' | '#000000'): Promise<ApiResult>;
+  enqueue_conversions(ids: string[], target: ConversionFormat, background: '#FFFFFF' | '#000000', options?: ConversionOptions): Promise<ApiResult>;
   prepare_conversion(taskId: string): Promise<ApiResult>;
   set_theme(theme: Theme): Promise<ApiResult>;
   set_language(language: Language): Promise<ApiResult>;

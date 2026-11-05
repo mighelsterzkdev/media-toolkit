@@ -116,7 +116,7 @@ def _image_has_transparency(image: Image.Image) -> bool:
     return False
 
 
-def _encode_static_image(image: Image.Image, target: str, output, *, background="#FFFFFF") -> None:
+def _encode_static_image(image: Image.Image, target: str, output, *, background="#FFFFFF", quality=None) -> None:
     """One encoder for checked, oriented downloads and local still images."""
     # Keep an embedded color profile only when the pixels remain in its RGB
     # color space. A CMYK profile must never be attached to converted RGB data.
@@ -126,7 +126,7 @@ def _encode_static_image(image: Image.Image, target: str, output, *, background=
         with image.convert("RGBA") as rgba, Image.new("RGB", rgba.size, background) as flattened, rgba.getchannel("A") as alpha:
             flattened.paste(rgba, mask=alpha)
             if target == "jpg":
-                flattened.save(output, "JPEG", quality=90, optimize=True, **metadata)
+                flattened.save(output, "JPEG", quality=90 if quality is None else quality, optimize=True, **metadata)
             else:
                 flattened.save(output, "BMP")
     elif target == "gif":
@@ -145,11 +145,11 @@ def _encode_static_image(image: Image.Image, target: str, output, *, background=
     elif target in ("png", "webp", "avif", "tiff", "ico", "tga", "jp2"):
         with image.convert("RGBA" if _image_has_transparency(image) else "RGB") as converted:
             if target == "webp":
-                converted.save(output, "WEBP", lossless=True, exact=True, **metadata)
+                converted.save(output, "WEBP", lossless=quality is None, quality=100 if quality is None else quality, exact=True, **metadata)
             elif target == "png":
                 converted.save(output, "PNG", optimize=True, **metadata)
             elif target == "avif":
-                converted.save(output, "AVIF", quality=90, subsampling="4:4:4", speed=6, **metadata)
+                converted.save(output, "AVIF", quality=90 if quality is None else quality, subsampling="4:4:4", speed=6, **metadata)
             elif target == "tiff":
                 converted.save(output, "TIFF", compression="tiff_deflate", **metadata)
             elif target == "ico":

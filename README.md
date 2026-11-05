@@ -7,6 +7,12 @@ A desktop app with two tools: **Download** saves media from a URL in its origina
 
 ![Media Toolkit desktop interface](docs/media-toolkit.jpg)
 
+## Version 0.14.0
+
+- Local conversion controls for resizing and file quality, with optional output-size compression for supported formats. Settings are saved with each queued task; original files are kept.
+- Search the queue and filter active, failed, completed or cancelled tasks. **Retry failed** retries eligible failures together, and **Clear finished** keeps failed and cancelled items available for retry. Individual finished entries can be removed without deleting saved files.
+- The project launcher now targets this release instead of an older portable build.
+
 ## Version 0.13.3
 
 - The update notice is a card with a short explanation and, while downloading, a progress bar.
@@ -56,6 +62,8 @@ Animated GIF, WebP and APNG sources retain their frames in compatible animation 
 ## Convert local files
 
 Open **Convert** and click **Add files** to choose up to 100 local media files. The app checks their actual contents and available encoders before showing output formats. Choose a format, review the compatible-file count, select the destination, then click **Convert**. A mixed selection converts only the files compatible with that target; the app shows how many files will be skipped. Eligible completed downloads also have a **Convert file** shortcut.
+
+For still images, set a maximum width; for video outputs, choose the original height, 720p, 1080p or a custom maximum. Resizing keeps proportions and never enlarges a source. Supported lossy outputs also offer smaller, balanced and best-quality presets. An optional target size is available for still JPG/WebP/AVIF, MP4/MKV/MOV/WebM and lossy audio outputs. It overrides the quality preset and uses a bounded number of attempts; a result is saved only when it fits. Very small targets can fail, and lowering dimensions or increasing the size target can help. Animation and lossless audio outputs do not offer target-size compression. These per-task controls are separate from the download limits in Settings, and can also process a file without changing its format.
 
 | Content | Output formats |
 | --- | --- |
@@ -317,7 +325,7 @@ python -B -m venv .tools/build-env
 .\.tools\build-env\Scripts\python.exe -B scripts/verify_desktop.py dist/media-toolkit-0.13.2-windows-x64/media-toolkit.exe
 ```
 
-Use a new output directory for each build. The desktop build produces both executables, their separate library folders, a complete ZIP, and `SHA256SUMS.txt`. `scripts/build_windows.py` remains available for a terminal-only ZIP. The committed frontend assets and notices are included without installing Node.js on the build machine. A source/output fingerprint rejects stale, changed or missing frontend assets before packaging; after editing the interface, run `pnpm install --frozen-lockfile` and `pnpm build` in `desktop-ui`. CI also rebuilds and compares them. The build checks the executable archive to exclude optional Mutagen and build-time PyInstaller modules. The verifier removes Python and external tools from PATH, checks the bundled executable, preserves local image/video originals, converts GIF animation to H.264 MP4, extracts original AAC audio, converts MP3, verifies cached reuse, runs a link queue, checks remembered preferences, and terminates/restarts a real frozen HTTP download to verify continuation. Its temporary download history is isolated from the user's history. The **Build portable Windows release** workflow builds and checks the same artifacts on tagged versions or manual runs; it does not publish a release automatically.
+Use a new output directory for each build. The desktop build produces both executables, their separate library folders, a complete ZIP, and `SHA256SUMS.txt`. `scripts/build_windows.py` remains available for a terminal-only ZIP. The committed frontend assets and notices are included without installing Node.js on the build machine. A source/output fingerprint rejects stale, changed or missing frontend assets before packaging; after editing the interface, run `pnpm install --frozen-lockfile` and `pnpm build` in `desktop-ui`. CI also rebuilds and compares them. The build checks the executable archive to exclude optional Mutagen and build-time PyInstaller modules. The verifier removes Python and external tools from PATH, checks the bundled executable, preserves local image/video originals, converts GIF animation to H.264 MP4, extracts original AAC audio, converts MP3, verifies cached reuse, runs a link queue, checks remembered preferences, and terminates/restarts a real frozen HTTP download to verify continuation. Its temporary download history is isolated from the user's history. The **Build portable Windows release** workflow builds and checks the same artifacts on tagged versions or manual runs. Version tags publish the verified Windows ZIP and checksums automatically.
 
 Keep `.venv/` and `.tools/` to avoid reinstalling source dependencies. Downloaded media, generated builds, caches, and package metadata are excluded from Git. Launchers and documented Python commands use `-B` to avoid source bytecode caches.
 

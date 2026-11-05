@@ -24,6 +24,7 @@ from .dependencies import PROJECT_ROOT, find_ffmpeg, find_js_runtime
 from .desktop_queue_store import DesktopQueueStore, RESTORED_MESSAGE, conversion_background, selection_descriptor, selection_identity
 from .desktop_worker import ProcessWorker
 from .errors import DownloadError
+from .conversion_options import changes_output, options_for, validate_options
 from .limits import validate_download_source_limits, validate_limits
 from .preferences import LANGUAGES, THEMES, load_appearance, load_preferences, save_appearance, save_preferences
 from .queue import MAX_BATCH_BYTES, MAX_QUEUE_URLS, MAX_URL_LENGTH, validated_urls
@@ -393,7 +394,7 @@ class DesktopService:
                 for (identifier, source), image in zip(sources, result):
                     # Only a fixed metadata schema crosses the native bridge.
                     public = {key: image.get(key) for key in ("format", "width", "height", "size", "transparent", "targets", "error",
-                                                             "media_type", "duration", "animated", "pages", "has_audio", "target_notes", "requires_tools", "background_targets")}
+                                                             "media_type", "duration", "animated", "pages", "has_audio", "target_notes", "requires_tools", "background_targets", "processing_targets")}
                     public.update(id=identifier, name=_text(Path(source).name, 300))
                     files.append(public)
                     if not image.get("error"):
@@ -437,38 +438,47 @@ class DesktopService:
         self._launch_local_check(*launch)
         return self.get_state()
 
-    def enqueue_conversions(self, identifiers, target, background="#FFFFFF"):
+    def enqueue_conversions(self, identifiers, target, background="#FFFFFF", options=None):
         if (not isinstance(identifiers, list) or not identifiers or len(identifiers) > MAX_CONVERSION_FILES
                 or any(not isinstance(identifier, str) for identifier in identifiers) or len(set(identifiers)) != len(identifiers)):
             raise DownloadError("Select between 1 and 100 checked media files.")
         if not isinstance(target, str) or not re.fullmatch(r"[a-z0-9]{2,8}", target) or background not in ("#FFFFFF", "#000000"):
             raise DownloadError("Choose an available output format and a white or black background.")
+        options = validate_options(options)
         with self._lock:
             self._ensure_open()
             if self._conversion["status"] != "ready":
                 raise DownloadError("Wait for the selected files to be checked before converting.")
-            records = []
+            records, task_options = [], []
             for identifier in identifiers:
                 image = self._local_images.get(identifier)
-                if image is None or target not in image["targets"]:
+                choices = options_for(image, target, options) if image is not None else options
+                allowed = image.get("processing_targets", image["targets"]) if image is not None and changes_output(choices) else image["targets"] if image is not None else []
+                if image is None or target not in allowed:
                     raise DownloadError("Choose a compatible format for every submitted file.")
-                records.append(deepcopy(image))
+                record = deepcopy(image)
+                if target not in record["targets"]:
+                    record["targets"].append(target)
+                if record.get("media_type") == "video" and record.get("transparent") and target in ("mp4", "mkv", "mov", "webm") and changes_output(choices):
+                    record["background_targets"] = list(dict.fromkeys([*record.get("background_targets", []), target]))
+                records.append(record)
+                task_options.append(choices)
             settings = deepcopy(self._settings)
             # Background only affects outputs with reduced alpha. Irrelevant
             # settings must not make two identical conversions distinct.
             identities = [("convert", image["source"], image["signature"], target,
-                           conversion_background(image, target, background), settings["output"]) for image in records]
+                            conversion_background(image, target, background), settings["output"], choices) for image, choices in zip(records, task_options)]
             active = [task["_identity"] for task in self._tasks if task["status"] not in TERMINAL]
-            additions = [(image, identity) for image, identity in zip(records, identities) if identity not in active]
+            additions = [(image, identity, choices) for image, identity, choices in zip(records, identities, task_options) if identity not in active]
             if len(self._tasks) + len(additions) > MAX_QUEUE_URLS:
                 raise DownloadError("The queue supports up to 1,000 items. Remove finished items first.")
-            for image, identity in additions:
+            for image, identity, choices in additions:
                 self._tasks.append({"id": uuid4().hex, "url": "", "title": _text(image["name"], 300), "action": "convert",
                                     "source_format": image["format"], "can_convert": False, "kind": image.get("media_type", "image"), "format": target,
                                     "status": "queued", "progress": None, "downloaded_bytes": 0, "total_bytes": None,
                                     "speed": None, "eta": None, "path": None, "error": None, "operation": None,
                                     "_identity": identity, "_settings": deepcopy(settings), "_image": image,
-                                    "_background": background, "_inspected": None, "_attempt": None})
+                                    "_background": background, "_conversion_options": choices, "_inspected": None, "_attempt": None})
             self._persist_queue()
             self._wake.set()
         return self.get_state()
@@ -595,7 +605,7 @@ class DesktopService:
                     work_dir = Path(tempfile.mkdtemp(prefix=".unidown-convert-", dir=output)).resolve()
                 except OSError as error:
                     raise DownloadError("The output folder could not be prepared. Choose another folder and retry.") from error
-                payload.update(image=task["_image"], background=task["_background"], work_dir=str(work_dir))
+                payload.update(image=task["_image"], background=task["_background"], work_dir=str(work_dir), options=task.get("_conversion_options"))
             worker.begin(payload)
             for event, payload in worker.events():
                 with self._lock:
@@ -703,8 +713,42 @@ class DesktopService:
 
     def remove_finished(self):
         with self._lock:
-            self._tasks = [task for task in self._tasks if task["status"] not in TERMINAL]
+            self._ensure_open()
+            # Failed/cancelled items still need the user's attention and retry.
+            self._tasks = [task for task in self._tasks if task["status"] not in {"completed", "existing"}]
             self._persist_queue()
+        return self.get_state()
+
+    def remove_task(self, task_id):
+        with self._lock:
+            self._ensure_open()
+            if not isinstance(task_id, str) or not task_id or len(task_id) > 100:
+                raise DownloadError("Choose a finished queue item to remove.")
+            task = self._find_task(task_id)
+            if task["status"] not in TERMINAL:
+                raise DownloadError("Wait for this item to stop before removing it.")
+            # Only forget the history entry; saved files and partials are kept.
+            self._tasks = [item for item in self._tasks if item is not task]
+            self._persist_queue()
+        return self.get_state()
+
+    def retry_failed(self, include_downloads=True):
+        if not isinstance(include_downloads, bool):
+            raise DownloadError("Choose whether downloads can be retried.")
+        with self._lock:
+            self._ensure_open()
+            for task in self._tasks:
+                if task["status"] != "failed" or (not include_downloads and task.get("action") != "convert"):
+                    continue
+                # A restored history can contain the same source as an active
+                # job. Keep its failure rather than enqueueing duplicate work.
+                if any(other is not task and other["_identity"] == task["_identity"]
+                       and other["status"] not in TERMINAL for other in self._tasks):
+                    continue
+                task.update(status="queued", progress=None, downloaded_bytes=0, total_bytes=None,
+                            speed=None, eta=None, path=None, error=None, can_convert=False, operation=None)
+            self._persist_queue()
+            self._wake.set()
         return self.get_state()
 
     def save_settings(self, settings):

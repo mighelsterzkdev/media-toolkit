@@ -132,6 +132,15 @@ class DesktopApi:
     def remove_finished(self):
         return self._call(self._service.remove_finished)
 
+    def remove_task(self, task_id):
+        return self._call(self._service.remove_task, task_id)
+
+    def retry_failed(self):
+        # Missing downloader tools must not block offline image conversions.
+        with self._tools_lock:
+            include_downloads = self._tools["status"] == "ready"
+        return self._call(self._service.retry_failed, include_downloads)
+
     def save_settings(self, settings):
         return self._call(self._service.save_settings, settings)
 
@@ -232,8 +241,8 @@ class DesktopApi:
     def clear_conversion_files(self):
         return self._call(self._service.clear_conversion_files)
 
-    def enqueue_conversions(self, file_ids, target, background="#FFFFFF"):
-        return self._call(self._service.enqueue_conversions, file_ids, target, background)
+    def enqueue_conversions(self, file_ids, target, background="#FFFFFF", options=None):
+        return self._call(self._service.enqueue_conversions, file_ids, target, background, options)
 
     def prepare_conversion(self, task_id):
         def prepare():

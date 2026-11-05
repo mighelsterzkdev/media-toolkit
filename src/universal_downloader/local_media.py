@@ -21,6 +21,7 @@ from PIL import Image, UnidentifiedImageError
 from . import local_conversion
 from .dependencies import find_ffmpeg, hidden_process_options
 from .errors import DownloadError
+from .conversion_options import changes_output, check_size, options_for, LOSSY_AUDIO
 from .ffmpeg_progress import run as run_with_progress
 from .local_animation import ANIMATION_FORMATS, MAX_ANIMATION_FRAMES, MAX_ANIMATION_PIXELS, convert_animation, inspect_animation
 from .media_alpha import composite_filters, decoder_options, has_alpha
@@ -279,7 +280,7 @@ def _fits_video_output(geometry, target, max_height):
         return False
 
 
-def _media_details(metadata, source, ffmpeg, *, max_height=None):
+def _media_details(metadata, source, ffmpeg, *, max_height=None, force_encode=False, include_native=False):
     video, audio = _streams(metadata)
     if not video and not audio:
         raise DownloadError("No playable audio or video stream was found in this file.")
@@ -293,6 +294,10 @@ def _media_details(metadata, source, ffmpeg, *, max_height=None):
     if max_height is not None and (isinstance(max_height, bool) or not isinstance(max_height, int) or max_height < 1):
         raise DownloadError("Choose a positive maximum video height.")
     plans = {target: _stream_plan(video, audio, target) for target in (*_AUDIO, *_VIDEO)}
+    if force_encode:
+        for target, plan in plans.items():
+            if target in _VIDEO or target in LOSSY_AUDIO:
+                plan.update(video_copy=False, audio_copy=False, operation="encoding")
     resize = bool(geometry and max_height is not None
                   and geometry.display_height + geometry.display_height % 2 > max_height)
     if resize:
@@ -301,7 +306,7 @@ def _media_details(metadata, source, ffmpeg, *, max_height=None):
             plans[target]["operation"] = "encoding"
     targets = [target for target, (encoder, muxer, _options) in _AUDIO.items()
                if audio and (plans[target]["audio_copy"] or encoder in encoders) and muxer in muxers
-               and (video or target != native or not plans[target]["audio_copy"])
+                and (video or target != native or not plans[target]["audio_copy"] or include_native)
                and (target != "flac" or channels <= 8)]
     if video:
         for target, (encoder, audio_encoder, muxer) in _VIDEO.items():
@@ -311,7 +316,7 @@ def _media_details(metadata, source, ffmpeg, *, max_height=None):
                     and (not audio or plan["audio_copy"] or audio_encoder in encoders)
                     and (max_height is None or max_height >= 2)
                     and (plan["video_copy"] or _fits_video_output(geometry, target, max_height))
-                    and (target != native or not compatible_native)):
+                    and (target != native or not compatible_native or include_native)):
                 targets.append(target)
         for target, (encoder, muxer) in _ANIMATION.items():
             if encoder in encoders and muxer in muxers and _fits_video_output(geometry, target, max_height):
@@ -355,11 +360,20 @@ def _media_details(metadata, source, ffmpeg, *, max_height=None):
     duration = _positive(metadata.get("format", {}).get("duration"))
     if duration is None:
         duration = max((_positive(stream.get("duration")) or 0 for stream in video + audio), default=0) or None
+    processing = list(targets)
+    if native in _AUDIO and audio:
+        encoder, muxer, _ = _AUDIO[native]
+        if encoder in encoders and muxer in muxers and (native != "flac" or channels <= 8):
+            processing.append(native)
+    if native in _VIDEO and video:
+        encoder, audio_encoder, muxer = _VIDEO[native]
+        if encoder in encoders and muxer in muxers and (not audio or audio_encoder in encoders) and _fits_video_output(geometry, native, max_height):
+            processing.append(native)
     return {"media_type": "video" if video else "audio", "format": native, "width": geometry.display_width if geometry else None,
             "height": geometry.display_height if geometry else None, "has_audio": bool(audio), "duration": duration,
             "transparent": transparent,
             "background_targets": [target for target in targets if transparent and (target == "gif" or target in _VIDEO and not plans[target]["video_copy"])],
-            "targets": targets, "target_notes": notes, "requires_tools": True,
+            "targets": targets, "processing_targets": list(dict.fromkeys(processing)), "target_notes": notes, "requires_tools": True,
             "_video_index": video[0]["index"] if video else None, "_audio_index": audio[0]["index"] if audio else None,
             "_video_duration": _positive(video[0].get("duration")) if video else None,
             "_native_compatible": plans.get(native, {}).get("operation") == "copying",
@@ -536,17 +550,71 @@ def _finish_apng_timing(output, duration):
                 stream.write(data + struct.pack(">I", zlib.crc32(b"fcTL" + data)))
 
 
+def _compression_arguments(arguments, target, options, duration, has_audio, attempt, previous_size):
+    """At most three complete encodes; never truncate a file to meet its limit."""
+    if options["quality"] == "preserve" and options["max_size"] is None:
+        return arguments
+    if target not in (*_VIDEO, *LOSSY_AUDIO):
+        return arguments
+    remove = {"-q:a", "-b:a"}
+    if target in _VIDEO:
+        remove |= {"-crf", "-b:v", "-maxrate", "-bufsize"}
+    result = []
+    position = 0
+    while position < len(arguments):
+        if arguments[position] in remove:
+            position += 2
+        else:
+            result.append(arguments[position])
+            position += 1
+    size = options["max_size"]
+    quality = options["quality"]
+    if size is None:
+        audio_rate = {"preserve": 192_000, "smaller": 96_000, "balanced": 160_000, "best": 256_000}[quality]
+        if target in ("opus", "webm"):
+            audio_rate = {"preserve": 128_000, "smaller": 64_000, "balanced": 128_000, "best": 192_000}[quality]
+        if target in _VIDEO:
+            crf = {"preserve": 20, "smaller": 28, "balanced": 23, "best": 18}[quality] + (10 if target == "webm" else 0)
+            result += ["-crf", str(crf)]
+            if target == "webm":
+                result += ["-b:v", "0"]
+    else:
+        if duration is None or not math.isfinite(duration) or duration <= 0:
+            raise DownloadError("Target file size requires a known media duration. Choose another file or remove the size target.")
+        # Leave room for container headers and encoder overshoot. Retry with a
+        # smaller budget after measured overshoot, within a fixed attempt cap.
+        budget = size * 8 / duration * .86 * (.72 ** attempt)
+        if previous_size is not None:
+            budget *= min(1, size / previous_size)
+        audio_rate = min(128_000, int(budget * .2)) if target in _VIDEO else min(320_000, int(budget))
+        if target in _VIDEO:
+            video_rate = int(budget) - (audio_rate if has_audio else 0)
+            if video_rate < 16_000 or has_audio and audio_rate < 16_000:
+                raise DownloadError("The target file size is too small for this media duration. Increase the target size.")
+            result += ["-b:v", str(video_rate), "-maxrate", str(video_rate), "-bufsize", str(video_rate * 2)]
+        if (target in LOSSY_AUDIO or has_audio) and audio_rate < 16_000:
+            raise DownloadError("The target file size is too small for this media duration. Increase the target size.")
+    if target in LOSSY_AUDIO or has_audio:
+        result += ["-b:a", str(audio_rate)]
+    return result
+
+
 def convert_local_file(media, target, output_dir, background="#FFFFFF", progress_hook=None, *, work_dir=None, ffmpeg_location=None,
-                       max_height=None):
+                       max_height=None, options=None):
     if not isinstance(media, dict) or media.get("error") or not media.get("source") or not isinstance(media.get("signature"), dict):
         raise DownloadError("Check this file before converting it.")
-    if not isinstance(target, str) or target not in media.get("targets", []):
+    options = options_for(media, target, options)
+    process = changes_output(options)
+    allowed = media.get("processing_targets", media.get("targets", [])) if process else media.get("targets", [])
+    if not isinstance(target, str) or target not in allowed:
         raise DownloadError("Choose a different compatible output format for this file.")
     if background not in ("#FFFFFF", "#000000"):
         raise DownloadError("Choose a white or black conversion background.")
     kind = media.get("media_type", "image")
     if kind == "image":
-        return local_conversion.convert_local_image(media, target, output_dir, background, progress_hook, work_dir=work_dir)
+        return local_conversion.convert_local_image(media, target, output_dir, background, progress_hook, work_dir=work_dir, options=options)
+    if options["max_height"] is not None:
+        max_height = options["max_height"]
     if kind == "animation":
         encode_mp4 = None
         if target == "mp4":
@@ -579,7 +647,8 @@ def convert_local_file(media, target, output_dir, background="#FFFFFF", progress
             if signature != media["signature"]:
                 raise DownloadError("The source file changed after it was checked. Add it again before converting.")
             metadata = _probe(snapshot, ffprobe)
-            checked = _media_details(metadata, snapshot, ffmpeg, max_height=max_height)
+            checked = _media_details(metadata, snapshot, ffmpeg, max_height=max_height,
+                                     force_encode=options["quality"] != "preserve" or options["max_size"] is not None, include_native=process)
             if target not in checked["targets"]:
                 raise DownloadError("Choose a different compatible output format for this file.")
             plan = checked["_plans"][target]
@@ -595,9 +664,9 @@ def convert_local_file(media, target, output_dir, background="#FFFFFF", progress
                 arguments += decoder_options(_streams(metadata)[0][0])
             arguments += ["-i", str(snapshot), "-map_metadata", "-1", "-map_chapters", "-1"]
             if target in _AUDIO:
-                encoder, muxer, options = _AUDIO[target]
+                encoder, muxer, audio_options = _AUDIO[target]
                 arguments += ["-map", f"0:{checked['_audio_index']}", "-vn", "-sn", "-dn"]
-                arguments += ["-c:a", "copy"] if plan["audio_copy"] else ["-c:a", encoder, *options]
+                arguments += ["-c:a", "copy"] if plan["audio_copy"] else ["-c:a", encoder, *audio_options]
                 arguments += ["-f", muxer]
             elif target in _ANIMATION:
                 if max_height is not None and (isinstance(max_height, bool) or not isinstance(max_height, int) or max_height < 1):
@@ -615,8 +684,22 @@ def convert_local_file(media, target, output_dir, background="#FFFFFF", progress
             if checked["_audio_channels"] > 2 and not plan["audio_copy"] and target not in (*_ANIMATION, "wav", "flac", "aiff"):
                 arguments += ["-ac", "2"]
             duration = checked.get("_video_duration") or checked["duration"] if target in _ANIMATION else checked["duration"]
-            _run_ffmpeg(ffmpeg, arguments, output, duration=duration,
-                        progress_hook=progress_hook, operation=plan["operation"])
+            previous_size = None
+            for attempt in range(3 if options["max_size"] is not None else 1):
+                if output.exists():
+                    output.unlink()
+                encoded_arguments = _compression_arguments(arguments, target, options, duration, checked["has_audio"], attempt, previous_size)
+                _run_ffmpeg(ffmpeg, encoded_arguments, output, duration=duration,
+                             progress_hook=progress_hook, operation=plan["operation"])
+                previous_size = output.stat().st_size
+                if options["max_size"] is None or previous_size <= options["max_size"]:
+                    break
+            check_size(output, options)
+            if options["max_size"] is not None:
+                encoded = _probe(output, ffprobe)
+                encoded_duration = _positive(encoded.get("format", {}).get("duration"))
+                if encoded_duration is None or abs(encoded_duration - duration) > max(.5, duration * .02):
+                    raise DownloadError("The compressed file could not be verified. The original file was kept.")
             if encoded_target == "apng":
                 _finish_apng_timing(output, checked.get("_video_duration"))
             if alpha_webp:

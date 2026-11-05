@@ -119,12 +119,12 @@ def _decoded(data: bytes):
             oriented.close()
 
 
-def _targets(native: str, width: int | None = None, height: int | None = None) -> list[str]:
+def _targets(native: str, width: int | None = None, height: int | None = None, *, include_native=False) -> list[str]:
     Image.init()
     supported_features = frozenset(features.get_supported())
     return [
         target for target, encoder in _ENCODERS.items()
-        if target != native and encoder in Image.SAVE
+        if (target != native or include_native) and encoder in Image.SAVE
         and (target not in _ENCODER_FEATURES or _ENCODER_FEATURES[target] in supported_features)
         and (target not in _OUTPUT_MAX_EDGE or all(value is None or value <= _OUTPUT_MAX_EDGE[target] for value in (width, height)))
         and (target != "ico" or width is not None and height is not None and width == height and 1 <= width <= 256)
@@ -149,6 +149,7 @@ def inspect_local_files(paths) -> list[dict]:
                 targets = _targets(native, image.width, image.height)
                 result.update(format=native, width=image.width, height=image.height,
                               transparent=_image_has_transparency(image), targets=targets,
+                              processing_targets=_targets(native, image.width, image.height, include_native=True),
                               target_notes={target: IMAGE_TARGET_NOTES[target] for target in targets if target in IMAGE_TARGET_NOTES})
         except DownloadError as error:
             result["error"] = str(error)
@@ -202,7 +203,7 @@ def _work_directory(output_dir: Path, work_dir: Path | None):
     yield resolved
 
 
-def convert_local_image(image: dict, target: str, output_dir: Path, background="#FFFFFF", progress_hook=None, *, work_dir: Path | None = None) -> Path:
+def convert_local_image(image: dict, target: str, output_dir: Path, background="#FFFFFF", progress_hook=None, *, work_dir: Path | None = None, options=None) -> Path:
     """Convert a checked snapshot; publish a unique complete file atomically."""
     if not isinstance(target, str) or target not in _ENCODERS:
         raise DownloadError("Choose a supported image output format.")
@@ -210,25 +211,46 @@ def convert_local_image(image: dict, target: str, output_dir: Path, background="
         raise DownloadError("Choose a white or black conversion background.")
     if not isinstance(image, dict) or image.get("error") or not image.get("source") or not isinstance(image.get("signature"), dict):
         raise DownloadError("Check this image before converting it.")
+    from .conversion_options import changes_output, check_size, options_for
+    options = options_for(image, target, options)
     source = Path(image["source"]).resolve()
     data, signature = _snapshot(source)
     if signature != image["signature"]:
         raise DownloadError("The source file changed after it was checked. Add it again before converting.")
     try:
         with _decoded(data) as (native, opened):
-            if target not in _targets(native, opened.width, opened.height):
+            if target not in _targets(native, opened.width, opened.height, include_native=changes_output(options)):
                 raise DownloadError("Choose a different compatible output format for this image.")
+            width = options["max_width"]
+            resized = None
+            if width is not None and opened.width > width:
+                resized = opened.resize((width, max(1, round(opened.height * width / opened.width))), Image.Resampling.LANCZOS)
+            pixels = resized if resized is not None else opened
             destination_dir = Path(output_dir).resolve()
             destination_dir.mkdir(parents=True, exist_ok=True)
             with _work_directory(destination_dir, work_dir) as temporary:
                 output = temporary / f"output.{target}"
                 if progress_hook:
                     progress_hook({"status": "converting"})
-                with output.open("xb") as encoded:
-                    _encode_static_image(opened, target, encoded, background=background)
-                    encoded.flush()
-                    os.fsync(encoded.fileno())
-                return _publish_unique(output, source, target, destination_dir)
+                quality = {"preserve": None, "smaller": 60, "balanced": 80, "best": 95}[options["quality"]]
+                qualities = [quality]
+                if options["max_size"] is not None:
+                    initial = quality if quality is not None else 90
+                    qualities = list(dict.fromkeys((initial, min(initial, 70), min(initial, 50), min(initial, 30), min(initial, 15), 1)))
+                try:
+                    for attempt_quality in qualities:
+                        with output.open("wb") as encoded:
+                            _encode_static_image(pixels, target, encoded, background=background, quality=attempt_quality)
+                            encoded.flush()
+                            os.fsync(encoded.fileno())
+                        with Image.open(output) as verified:
+                            verified.verify()
+                        if options["max_size"] is None or output.stat().st_size <= options["max_size"]:
+                            return _publish_unique(output, source, target, destination_dir)
+                    check_size(output, options)
+                finally:
+                    if resized is not None:
+                        resized.close()
     except PermissionError as error:
         raise DownloadError("The converted image could not be saved. Check the destination folder's permissions.") from error
     except MemoryError as error:
